@@ -1,71 +1,61 @@
-# dep-graph — Copilot PR Dependency Graph
+# dep-graph-core
 
-A [GitHub Copilot CLI](https://githubnext.com/projects/copilot-cli) canvas extension that renders a **D3 force-directed dependency graph** for any pull request — showing which files changed, how they reference each other, and which symbols were added, modified, or removed.
+A TypeScript library that builds a **file/symbol dependency graph** for a git pull request — which files changed, how they reference each other, and which symbols were added, modified, or removed — plus an optional local D3 force-graph viewer to look at the result in a browser.
 
-All parsing is deterministic (git + tree-sitter AST). No AI involved in the graph data.
-
-![dep-graph screenshot](https://user-images.githubusercontent.com/placeholder/dep-graph.png)
+All parsing is deterministic (git + tree-sitter AST). No AI involved.
 
 ## Features
 
 - **File-level graph** — every changed file as a node, import/reference edges between them
-- **Symbol expansion** — double-click any TypeScript/Go file to expand its changed symbols
-- **Change status colouring** — green (added), yellow (modified), red (removed)
+- **Symbol-level detail** — changed symbols per file (function/class/type/etc.), with call and named-import edges between symbols
+- **Change status** — added / modified / removed / unchanged, per file and per symbol
 - **Angular signal support** — `computed()`, `signal()`, `input()` class properties correctly traced
-- **Intra-file edges** — symbol→symbol references within a file shown on expansion
 - **Sibling links** — `.ts`/`.html`/`.scss` component triplets grouped together
-- **Alias resolution** — reads `tsconfig.json` paths at parse time (no hardcoded config)
 - **Go support** — package import suffix matching
-- **D3 served locally** — no internet access required in the iframe
+- **Optional D3 viewer** — a local HTTP server + browser UI with no external network access required
 
 ## Installation
 
-### From this repo (recommended)
+Not published to a registry. Install directly from this repo as a git dependency:
 
 ```bash
-# User-scoped: works across all your projects, nothing committed to project repos
-copilot extension install https://github.com/JeVaughan/copilot-dep-graph/tree/main/dep-graph --scope user
-
-# Project-scoped: committed to .github/extensions/ of the current repo
-copilot extension install https://github.com/JeVaughan/copilot-dep-graph/tree/main/dep-graph --scope project
+npm install github:JeVaughan/copilot-dep-graph
+# or pin to a tag/commit:
+npm install github:JeVaughan/copilot-dep-graph#v0.1.0
 ```
 
-Or from within the Copilot CLI chat:
-
-```
-install_extension("https://github.com/JeVaughan/copilot-dep-graph/tree/main/dep-graph")
-```
-
-### Requirements
-
-- Node.js runtime provided by the Copilot CLI host
-- Prebuilt tree-sitter native binaries are included for **win32-x64**
-- Other platforms need to rebuild: `cd dep-graph && npm install`
+npm runs this package's `prepare` script on install, which builds the TypeScript source — there's nothing to build yourself.
 
 ## Usage
 
-Open the canvas from the Copilot CLI chat:
+```ts
+import { parsePr, startViewer } from "dep-graph-core";
 
+const { nodes, links } = parsePr({
+  repoPath: "/path/to/repo",  // absolute path to a local git checkout
+  prRef: "FETCH_HEAD",        // any git ref / commit SHA
+  baseRef: "main",            // optional: override the base branch (default "HEAD")
+  exclude: ["migrations"],    // optional: path substrings to exclude
+});
+
+// Look at it in a browser:
+const viewer = await startViewer({ title: "My PR", nodes, links });
+console.log(viewer.url); // http://127.0.0.1:PORT/
+
+// Push an updated graph to any open browser tab:
+viewer.setGraph({ title: "My PR (updated)", nodes: newNodes, links: newLinks });
+
+// Shut the server down:
+await viewer.close();
 ```
-Open a dependency graph for PR FETCH_HEAD in C:\path\to\repo
-```
 
-Or invoke directly:
+`parsePr` has no dependency on `startViewer` — use it standalone if you just want the graph data (e.g. to render with your own UI, or serialize to JSON).
 
-```js
-open_canvas({
-  canvasId: "dep-graph",
-  instanceId: "my-graph",
-  input: {
-    prRef: "FETCH_HEAD",        // or any git ref / commit SHA
-    repoPath: "/path/to/repo",  // absolute path to the local git checkout
-    baseRef: "main",            // optional: override the base branch
-    exclude: ["migrations"]     // optional: path fragments to exclude
-  }
-})
-```
+### Embedding in a host tool
 
-## Interactions
+If you're wiring this into something like a GitHub Copilot CLI canvas extension, keep that wiring in a separate, shallow package: import `parsePr`/`startViewer` from this library and adapt their plain return values to whatever the host expects. This library has no knowledge of any specific host.
+
+## Interactions (viewer)
 
 | Action | Result |
 |--------|--------|
@@ -101,20 +91,34 @@ open_canvas({
 | Go | ✓ | ✓ | ✓ |
 | Other | — | — | regex fallback |
 
-## tsconfig path aliases
+## TypeScript path aliases
 
-The extension reads `tsconfig.json` at the repo root (or `frontend/tsconfig.json`) at parse time to resolve TypeScript path aliases like `@app/*`, `@app-shared/*`, etc. No hardcoded configuration needed.
+`parsePr` resolves `@alias/*`-style imports via a hardcoded alias map in [src/parse.mts](src/parse.mts) (`TS_ALIASES`), tailored to one specific frontend monorepo layout. It is not read from the target repo's `tsconfig.json` — if you're pointing this at a different repo, edit that map (or open an issue/PR to make it configurable).
 
 ## Project structure
 
 ```
-dep-graph/
-├── extension.mjs     # Canvas wiring, HTTP server, PR parsing pipeline
-├── treesitter.mjs    # AST extraction (TypeScript + Go)
-├── graph.html        # D3 force graph UI (self-contained)
-├── package.json      # tree-sitter dependencies
-├── d3.min.js         # Bundled D3 v7 (no CDN)
-└── node_modules/     # Prebuilt tree-sitter native binaries (win32-x64)
+dep-graph-core/
+├── src/
+│   ├── index.mts        # Public API barrel
+│   ├── parse.mts         # parsePr: git diff + tree-sitter → graph data
+│   ├── treesitter.mts    # AST extraction (TypeScript + Go)
+│   ├── viewer.mts        # Local HTTP/SSE server serving the D3 UI
+│   └── graph-client.ts   # Browser-side D3 force graph renderer
+├── graph.html            # D3 force graph UI shell (loads /graph-client.js)
+├── d3.min.js             # Bundled D3 v7 (no CDN)
+├── package.json
+├── tsconfig.json          # Compiles src/*.mts → dist/ (Node ESM library)
+└── tsconfig.browser.json  # Compiles src/graph-client.ts → dist/ (browser script)
+```
+
+`dist/` and `node_modules/` are gitignored — they're produced by `npm run build` (or automatically via `prepare` when installed as a dependency).
+
+### Developing
+
+```bash
+npm install
+npm run build   # or: npm run watch
 ```
 
 ## License

@@ -1,9 +1,33 @@
 {
-  "name": "dep-graph",
+  "name": "dep-graph-core",
+  "version": "0.1.0",
+  "description": "Deterministic (git + tree-sitter) PR dependency graph builder, with an optional local D3 viewer.",
   "type": "module",
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs"
+    }
+  },
+  "files": [
+    "dist",
+    "graph.html",
+    "d3.min.js"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && tsc -p tsconfig.browser.json",
+    "prepare": "npm run build",
+    "watch": "tsc -p tsconfig.json --watch"
+  },
   "dependencies": {
     "tree-sitter": "^0.21.1",
     "tree-sitter-go": "^0.21.2",
     "tree-sitter-typescript": "^0.21.2"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "@types/node": "^20.14.10"
   }
 }
