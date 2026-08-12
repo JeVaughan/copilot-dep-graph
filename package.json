@@ -19,7 +19,9 @@
   "scripts": {
     "build": "tsc -p tsconfig.json && tsc -p tsconfig.browser.json",
     "prepare": "npm run build",
-    "watch": "tsc -p tsconfig.json --watch"
+    "watch": "tsc -p tsconfig.json --watch",
+    "test": "npm run build && node --test \"test/*.test.mts\"",
+    "dev": "npm run build && node dev/serve.mts"
   },
   "dependencies": {
     "tree-sitter": "^0.21.1",

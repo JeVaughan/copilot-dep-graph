@@ -196,7 +196,9 @@ export function parsePr({ repoPath, prRef = "FETCH_HEAD", baseRef = "HEAD", excl
         const absResolved = resolvePath(absDir, importPath).replace(/\\/g, "/");
         const repoRoot   = repoPath.replace(/\\/g, "/").replace(/\/$/, "");
         const rel        = absResolved.replace(repoRoot + "/", "");
-        for (const e of [".ts", ".tsx", ".js", "/index.ts", "/index.tsx", "/index.js"]) {
+        for (const e of ["", ".ts", ".tsx", ".js", "/index.ts", "/index.tsx", "/index.js"]) {
+            const candidate = rel + e;
+            if (prPaths.has(candidate)) return candidate;
         }
         return null;
     }
@@ -392,7 +394,9 @@ function buildRegexEdges(
         const absResolved = resolvePath(absDir, m[1]).replace(/\\/g, "/");
         const repoRoot   = repoPath.replace(/\\/g, "/").replace(/\/$/, "");
         const repoRelative = absResolved.replace(repoRoot + "/", "");
-        for (const e of [".ts", ".tsx", ".js", "/index.ts", "/index.tsx", "/index.js"]) {
+        for (const e of ["", ".ts", ".tsx", ".js", "/index.ts", "/index.tsx", "/index.js"]) {
+            const candidate = repoRelative + e;
+            if (prPaths.has(candidate)) { addLink(srcId, shortId(candidate), status); break; }
         }
     }
 }

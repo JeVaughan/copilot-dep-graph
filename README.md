@@ -105,6 +105,8 @@ dep-graph-core/
 │   ├── treesitter.mts    # AST extraction (TypeScript + Go)
 │   ├── viewer.mts        # Local HTTP/SSE server serving the D3 UI
 │   └── graph-client.ts   # Browser-side D3 force graph renderer
+├── test/                 # node:test suite, runs against the built dist/
+├── dev/serve.mts         # Manual dev harness (not published)
 ├── graph.html            # D3 force graph UI shell (loads /graph-client.js)
 ├── d3.min.js             # Bundled D3 v7 (no CDN)
 ├── package.json
@@ -119,6 +121,16 @@ dep-graph-core/
 ```bash
 npm install
 npm run build   # or: npm run watch
+npm test         # runs the node:test suite against the built dist/
+```
+
+### Trying it out in a browser
+
+`npm run dev` starts the D3 viewer with sample data and prints a URL to open. Pass `--repo` to parse a real PR diff instead:
+
+```bash
+npm run dev
+npm run dev -- --repo /path/to/repo --pr HEAD --base main
 ```
 
 ## License
