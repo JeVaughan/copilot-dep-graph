@@ -1,0 +1,433 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Dependency Graph</title>
+  <script src="/d3.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { width: 100%; height: 100%; overflow: hidden;
+      background: var(--background-color-default, #0d1117);
+      color: var(--text-color-default, #e6edf3);
+      font-family: var(--font-sans, sans-serif); font-size: 14px; }
+    #toolbar { display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+      background: var(--background-color-subtle, #161b22);
+      border-bottom: 1px solid var(--border-color-default, #30363d); flex-shrink: 0; }
+    #toolbar h1 { font-size: 14px; font-weight: 600; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    button { background: var(--background-color-subtle, #161b22); color: var(--text-color-default, #e6edf3);
+      border: 1px solid var(--border-color-default, #30363d); border-radius: 6px; padding: 4px 10px; cursor: pointer; font-size: 12px; }
+    button:hover { background: var(--background-color-emphasis, #21262d); }
+    #canvas-wrap { flex: 1; position: relative; overflow: hidden; }
+    svg { width: 100%; height: 100%; display: block; }
+    .link { stroke: #8b949e; stroke-opacity: 0.45; stroke-width: 1.2; }
+    /* call links: solid, coloured by source file status */
+    .link.call     { stroke: #8b949e; stroke-opacity: 0.45; stroke-width: 1.2; }
+    /* import links: thin dashed, lower visual weight */
+    .link.import   { stroke: #484f58; stroke-opacity: 0.45; stroke-width: 0.8; stroke-dasharray: 4,3; }
+    /* sibling links: very faint dotted — only structural, no semantic */
+    .link.sibling  { stroke: #484f58; stroke-opacity: 0.20; stroke-width: 0.6; stroke-dasharray: 2,5; marker-end: none; }
+    /* status overrides — must come after type rules (same specificity, cascade order) */
+    .link.call.added,   .link.import.added    { stroke: #56d364; stroke-opacity: 0.35; }
+    .link.call.modified,.link.import.modified { stroke: #e3b341; stroke-opacity: 0.35; }
+    .link.call.removed, .link.import.removed  { stroke: #f85149; stroke-opacity: 0.30; stroke-dasharray: 5,3; }
+    .node circle { cursor: default; }
+    .node.expandable circle { cursor: pointer; }
+    .node text, .symbol-node text { fill: #e6edf3; font-size: 11px; pointer-events: none; dominant-baseline: central; }
+    .node text.label { font-weight: 500; }
+    .symbol-node circle { opacity: 0.85; }
+    .symbol-node text { font-size: 10px; fill: #adbac7; }
+    #tooltip { position: absolute; pointer-events: none;
+      background: var(--background-color-subtle, #161b22);
+      border: 1px solid var(--border-color-default, #30363d);
+      border-radius: 6px; padding: 8px 10px; font-size: 12px; max-width: 300px;
+      opacity: 0; transition: opacity 0.1s; z-index: 10; }
+    #tooltip.visible { opacity: 1; }
+    #tooltip strong { display: block; margin-bottom: 4px; word-break: break-all; }
+    #tooltip .meta { color: #7d8590; font-size: 11px; }
+    #empty { display: none; position: absolute; inset: 0; align-items: center; justify-content: center;
+      color: #7d8590; padding: 1rem; text-align: center; }
+    #empty.show { display: flex; }
+    #app { display: flex; flex-direction: column; height: 100vh; }
+  </style>
+</head>
+<body>
+<div id="app">
+  <div id="toolbar">
+    <h1 id="graph-title">Dependency Graph</h1>
+    <button id="btn-fit">Fit</button>
+    <button id="btn-reset-expand">Collapse all</button>
+    <span style="flex:1"></span>
+    <span style="display:flex;align-items:center;gap:10px;font-size:11px;color:#7d8590">
+      <span style="color:#56d364;font-weight:600">+ added</span>
+      <span style="color:#e3b341;font-weight:600">~ modified</span>
+      <span style="color:#f85149;font-weight:600">- removed</span>
+      <span style="color:#8b949e">&#9135; call</span>
+      <span style="color:#484f58">&#183;&#183; import</span>
+      <span style="color:#adbac7">&#9650; fn/method</span>
+      <span style="color:#adbac7">&#9632; class/type</span>
+      <span style="color:#adbac7">&#9679; prop/const</span>
+    </span>
+  </div>
+  <div id="canvas-wrap">
+    <svg id="svg"><g id="root"></g></svg>
+    <div id="tooltip"></div>
+    <div id="empty" class="show"><span id="empty-msg">No graph loaded.</span></div>
+  </div>
+</div>
+<script>
+const d3 = window.d3;
+const INSTANCE_ID = __INSTANCE_ID__;
+const STATUS_COLOR = { added: '#56d364', modified: '#e3b341', removed: '#f85149' };
+const NODE_NEUTRAL = '#8b949e';
+function nodeStatus(d) { return d.status ?? null; }
+function nodeColor(d) { return d.status ? STATUS_COLOR[d.status] : NODE_NEUTRAL; }
+function symColor(d) {
+  const s = d.status && d.status !== 'unchanged' ? d.status : d._parentStatus;
+  return (s && s !== 'unchanged') ? STATUS_COLOR[s] : '#8b949e';
+}
+function shortLabel(id) { return (id ?? '').split('/').pop(); }
+
+function hullPath(pts, pad) {
+  if (!pts.length) return '';
+  const cx = pts.reduce((s, p) => s + p[0], 0) / pts.length;
+  const cy = pts.reduce((s, p) => s + p[1], 0) / pts.length;
+  if (pts.length < 3) {
+    const r = pad + 20;
+    return 'M ' + (cx-r) + ',' + cy + ' a' + r + ',' + r + ' 0 1,0 ' + (r*2) + ',0 a' + r + ',' + r + ' 0 1,0 -' + (r*2) + ',0';
+  }
+  const hull = d3.polygonHull(pts) ?? pts;
+  const padded = hull.map(p => {
+    const dx = p[0]-cx, dy = p[1]-cy, len = Math.sqrt(dx*dx+dy*dy) || 1;
+    return [p[0]+(dx/len)*pad, p[1]+(dy/len)*pad];
+  });
+  return d3.line().curve(d3.curveCatmullRomClosed.alpha(0.5))(padded);
+}
+
+let graphData = __GRAPH_DATA__;
+let expandedNodes = new Set();
+let showIsolated = true;
+let simulation = null;
+const svg = d3.select('#svg');
+const root = d3.select('#root');
+const zoom = d3.zoom().scaleExtent([0.1, 8]).on('zoom', e => root.attr('transform', e.transform));
+svg.call(zoom).on('dblclick.zoom', null);
+const defs = svg.append('defs');
+[
+  { id: 'arrow', color: '#8b949e' },
+  { id: 'arrow-added', color: '#56d364' },
+  { id: 'arrow-modified', color: '#e3b341' },
+  { id: 'arrow-removed', color: '#f85149' },
+].forEach(({ id, color }) => {
+  defs.append('marker')
+    .attr('id', id).attr('viewBox', '0 -4 8 8')
+    .attr('refX', 18).attr('refY', 0).attr('markerWidth', 4).attr('markerHeight', 4).attr('orient', 'auto')
+    .append('path').attr('d', 'M0,-4L8,0L0,4').attr('fill', color);
+});
+
+let linkSel, nodeSel;
+
+function render() {
+  const { nodes: rawAll, links: rawLinks } = graphData;
+  document.getElementById('graph-title').textContent = graphData.title ?? 'Dependency Graph';
+  if (!rawAll || !rawAll.length) {
+    document.getElementById('empty').classList.add('show');
+    document.getElementById('empty-msg').textContent = graphData.error ?? 'No graph loaded.';
+    return;
+  }
+  document.getElementById('empty').classList.remove('show');
+
+  const raw = rawAll;
+
+  const allNodes = [], allLinks = [], nodeById = new Map(), groupSymbols = new Map();
+
+  // Snapshot current positions so existing nodes don't jump
+  const posCache = new Map();
+  if (simulation) {
+    simulation.stop();
+    for (const nd of simulation.nodes()) posCache.set(nd.id, { x: nd.x, y: nd.y });
+  }
+  const isFirstRender = posCache.size === 0;
+
+  for (const n of raw) {
+    const pos = posCache.get(n.id);
+    const node = Object.assign({}, n, { _type: 'file', _expanded: expandedNodes.has(n.id) });
+    if (pos) { node.x = pos.x; node.y = pos.y; }
+    allNodes.push(node); nodeById.set(n.id, node);
+  }
+  for (const n of raw) {
+    // Only show symbols that actually changed (signature or body diff)
+    const cs = changedSymbols(n);
+    if (expandedNodes.has(n.id) && cs.length) {
+      const parent = nodeById.get(n.id);
+      const group = [];
+      for (const sym of cs) {
+        const sid = n.id + ':::' + sym.name;
+        const ep = posCache.get(sid);
+        const sn = {
+          id: sid, label: sym.name, kind: sym.kind, status: sym.status, _type: 'symbol', _parent: n.id,
+          _parentStatus: n.status,
+          x: (ep && ep.x) || ((parent && parent.x) || 0) + (Math.random() - 0.5) * 60,
+          y: (ep && ep.y) || ((parent && parent.y) || 0) + (Math.random() - 0.5) * 60
+        };
+        allNodes.push(sn); nodeById.set(sid, sn); group.push(sn);
+      }
+      groupSymbols.set(n.id, group);
+    }
+  }
+
+  // â”€â”€ Build effective link set â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  const nodeIdSet = new Set(allNodes.map(n => n.id));
+
+  // Import links: always fileâ†’file, never follow expansion
+  for (const lk of rawLinks) {
+    if (lk._linkType !== 'import') continue;
+    if (nodeIdSet.has(lk.source) && nodeIdSet.has(lk.target)) allLinks.push(Object.assign({}, lk));
+  }
+
+  // Sibling links: structural connectors between co-located component files (.ts/.html/.scss)
+  for (const lk of rawLinks) {
+    if (lk._linkType !== 'sibling') continue;
+    if (nodeIdSet.has(lk.source) && nodeIdSet.has(lk.target)) allLinks.push(Object.assign({}, lk));
+  }
+  //   neither expanded:    fileA â†’ fileB
+  //   source expanded:     sym â†’ fileB  (falls back to fileA if sym not shown)
+  //   both expanded:       sym â†’ sym    (falls back to file if either sym not shown)
+  const callLinkKeys = new Set();
+  for (const lk of rawLinks) {
+    if (lk._linkType !== 'call') continue;
+    // Resolve source: prefer symbol node if file expanded and symbol is visible, else stay on file
+    const srcSym = expandedNodes.has(lk.sourceFile) && nodeIdSet.has(lk.source) ? lk.source : null;
+    const tgtSym = expandedNodes.has(lk.targetFile) && nodeIdSet.has(lk.target) ? lk.target : null;
+    const src = srcSym ?? lk.sourceFile;
+    const tgt = tgtSym ?? lk.targetFile;
+    if (src === tgt) continue;
+    if (!nodeIdSet.has(src) || !nodeIdSet.has(tgt)) continue;
+    const key = src + '->' + tgt;
+    if (callLinkKeys.has(key)) continue;
+    callLinkKeys.add(key);
+    // Symbol-level status takes priority; fall back to file status for unchanged symbols
+    const srcFileNode = nodeById.get(lk.sourceFile);
+    const tgtFileNode = nodeById.get(lk.targetFile);
+    const callStatus = (lk.status && lk.status !== 'unchanged') ? lk.status
+                     : srcFileNode?.status ?? tgtFileNode?.status ?? null;
+    allLinks.push({ source: src, target: tgt, _linkType: 'call', status: callStatus });
+  }
+
+  // Degree map for charge scaling (read before D3 mutates source/target to objects)
+  const degreeMap = new Map();
+  for (const l of allLinks) {
+    const s = l.source, t = l.target;
+    degreeMap.set(s, (degreeMap.get(s) || 0) + 1);
+    degreeMap.set(t, (degreeMap.get(t) || 0) + 1);
+  }
+
+  const w = svg.node().clientWidth || 800, h = svg.node().clientHeight || 600;
+
+  function forceGroup(alpha) {
+    const R_ATTRACT = 65, K_ATTRACT = 0.25;
+    const GROUP_PAD = 35; // padding around group bounding circle
+
+    // 1. Pull each symbol toward its parent
+    for (const nd of allNodes) {
+      if (nd._type !== 'symbol') continue;
+      const p = nodeById.get(nd._parent); if (!p) continue;
+      const dx = nd.x - p.x, dy = nd.y - p.y, dist = Math.sqrt(dx*dx + dy*dy) || 1;
+      if (dist > R_ATTRACT) {
+        const pull = (dist - R_ATTRACT) / dist * K_ATTRACT * alpha;
+        nd.vx -= dx * pull; nd.vy -= dy * pull;
+      }
+    }
+
+    // 2. Compute each group's bounding circle and repel external nodes from it
+    for (const [parentId, syms] of groupSymbols) {
+      const parent = nodeById.get(parentId); if (!parent) continue;
+      const memberIds = new Set([parentId, ...syms.map(s => s.id)]);
+
+      // Centroid of parent + all its symbols
+      let cx = parent.x, cy = parent.y;
+      for (const s of syms) { cx += s.x; cy += s.y; }
+      cx /= (1 + syms.length); cy /= (1 + syms.length);
+
+      // Bounding radius: max distance from centroid to any member
+      let maxR = Math.sqrt((parent.x-cx)**2 + (parent.y-cy)**2);
+      for (const s of syms) {
+        const r = Math.sqrt((s.x-cx)**2 + (s.y-cy)**2);
+        if (r > maxR) maxR = r;
+      }
+      const groupR = maxR + GROUP_PAD;
+
+      // Repel all non-member nodes outside the bounding circle
+      for (const nd of allNodes) {
+        if (memberIds.has(nd.id)) continue;
+        const dx = nd.x - cx, dy = nd.y - cy;
+        const dist = Math.sqrt(dx*dx + dy*dy) || 1;
+        if (dist < groupR) {
+          const strength = ((groupR - dist) / groupR) * 1.2 * alpha;
+          nd.vx += (dx / dist) * strength * groupR;
+          nd.vy += (dy / dist) * strength * groupR;
+        }
+      }
+    }
+  }
+
+  simulation = d3.forceSimulation(allNodes)
+    .force('link', d3.forceLink(allLinks).id(d => d.id)
+      .distance(d => d._linkType === 'sibling' ? 30 : d._linkType === 'import' ? 55 : 70)
+      .strength(d => d._linkType === 'sibling' ? 0.5 : d._linkType === 'import' ? 0.02 : (d._type === 'symbol' ? 0.35 : 0.08)))
+    .force('charge', d3.forceManyBody().strength(d => {
+      if (d._type === 'symbol') return -40;
+      const deg = degreeMap.get(d.id) || 0;
+      return -(100 + deg * 28);
+    }))
+    .force('center', isFirstRender ? d3.forceCenter(w/2, h/2) : null)
+    .force('gx', d3.forceX(w/2).strength(0.015))
+    .force('gy', d3.forceY(h/2).strength(0.015))
+    .force('collision', d3.forceCollide(d => d._type === 'symbol' ? 20 : (d._expanded ? 14 : 48)))
+    .force('grouping', forceGroup)
+    .alpha(isFirstRender ? 1 : 0.3)
+    .restart();
+
+  root.selectAll('.hull-layer').remove();
+  const hullLayer = root.insert('g', ':first-child').attr('class', 'hull-layer');
+  const hullPaths = new Map();
+  for (const pid of groupSymbols.keys()) {
+    hullPaths.set(pid, hullLayer.append('path')
+      .style('fill', '#8b949e').style('fill-opacity', '0.07')
+      .style('stroke', '#8b949e').style('stroke-opacity', '0.35')
+      .style('stroke-width', '1.5').style('pointer-events', 'none'));
+  }
+
+  root.selectAll('.link, .link-label-g').remove();
+  linkSel = root.insert('g', '.nodes').attr('class', 'links')
+    .selectAll('line').data(allLinks).join('line')
+    .attr('class', d => {
+      const st = d.status && d.status !== 'unchanged' ? ' ' + d.status : '';
+      return 'link ' + d._linkType + st;
+    })
+    .attr('marker-end', d => {
+      if (d._linkType === 'import' || d._linkType === 'sibling') return null;
+      const s = d.status && d.status !== 'unchanged' ? d.status : null;
+      return s ? 'url(#arrow-' + s + ')' : 'url(#arrow)';
+    });
+
+  root.selectAll('.node, .symbol-node').remove();
+  nodeSel = root.append('g').attr('class', 'nodes')
+    .selectAll('g').data(allNodes).join('g')
+    .attr('class', d => (d._type === 'symbol' ? 'symbol-node' : 'node') + (expandable(d) ? ' expandable' : ''))
+    .call(d3.drag()
+      .on('start', (e, d) => { if (!e.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
+      .on('drag',  (e, d) => { d.fx = e.x; d.fy = e.y; })
+      .on('end',   (e, d) => { if (!e.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; }))
+    .on('dblclick', (e, d) => { e.stopPropagation(); handleDblClick(d); })
+    .on('mouseenter', (e, d) => showTooltip(e, d))
+    .on('mouseleave', () => tooltip.classList.remove('visible'));
+
+  nodeSel.filter(d => d._type === 'file' && d._expanded).append('circle')
+    .attr('r', 4).attr('fill', d => nodeColor(d)).attr('fill-opacity', 0.5).attr('stroke', 'none');
+
+  nodeSel.filter(d => d._type === 'file' && !d._expanded).append('circle')
+    .attr('r', 10).attr('fill', d => nodeColor(d))
+    .attr('stroke', 'rgba(255,255,255,0.15)').attr('stroke-width', 1.5);
+
+  nodeSel.filter(d => d._type === 'symbol').each(function(d) {
+    const g = d3.select(this);
+    const col = symColor(d);
+    const sh = symShape(d);
+    if (sh === 'triangle') {
+      g.append('polygon').attr('points', '0,-8 7,5 -7,5')
+        .attr('fill', col).attr('stroke', col).attr('stroke-opacity', 0.5).attr('stroke-width', 1).attr('opacity', 0.85);
+    } else if (sh === 'square') {
+      g.append('rect').attr('x', -6).attr('y', -6).attr('width', 12).attr('height', 12).attr('rx', 1)
+        .attr('fill', col).attr('stroke', col).attr('stroke-opacity', 0.5).attr('stroke-width', 1).attr('opacity', 0.85);
+    } else {
+      g.append('circle').attr('r', 7)
+        .attr('fill', col).attr('stroke', col).attr('stroke-opacity', 0.5).attr('stroke-width', 1).attr('opacity', 0.85);
+    }
+  });
+
+  nodeSel.filter(d => d._type === 'file').append('text').attr('class', 'label')
+    .attr('x', d => d._expanded ? 0 : 14)
+    .attr('y', d => d._expanded ? -14 : 0)
+    .attr('text-anchor', d => d._expanded ? 'middle' : 'start')
+    .attr('fill', d => d._expanded ? '#7d8590' : '#e6edf3')
+    .text(d => shortLabel(d.label || d.id));
+
+  nodeSel.filter(d => d._type === 'symbol').append('text')
+    .attr('class', 'label').attr('x', 10).attr('y', 0)
+    .text(d => shortLabel(d.label || d.id));
+
+
+  simulation.on('tick', () => {
+    linkSel.attr('x1', d => d.source.x).attr('y1', d => d.source.y)
+            .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+    nodeSel.attr('transform', d => 'translate(' + (d.x || 0) + ',' + (d.y || 0) + ')');
+    groupSymbols.forEach((syms, pid) => {
+      const p = nodeById.get(pid);
+      if (p) hullPaths.get(pid).attr('d', hullPath([[p.x, p.y]].concat(syms.map(s => [s.x, s.y])), 22));
+    });
+  });
+}
+
+function symShape(d) {
+  const k = d.kind ?? '';
+  if (k === 'function' || k === 'method') return 'triangle';
+  if (k === 'class' || k === 'interface' || k === 'type' || k === 'enum') return 'square';
+  return 'circle'; // property, const, field, unknown
+}
+
+function changedSymbols(d) {
+  return (d.symbols ?? []).filter(s => s.status && s.status !== 'unchanged');
+}
+
+// A file node is expandable if it has changed symbols (signature or body diff).
+function expandable(d) {
+  return d._type === 'file' && changedSymbols(d).length > 0;
+}
+
+function handleDblClick(d) {
+  if (!expandable(d)) return;
+  if (expandedNodes.has(d.id)) expandedNodes.delete(d.id); else expandedNodes.add(d.id);
+  render();
+}
+
+const tooltip = document.getElementById('tooltip');
+function showTooltip(event, d) {
+  const s = nodeStatus(d);
+  const col = s ? STATUS_COLOR[s] : '';
+  const badge = s ? ' <span style="color:' + col + ';font-weight:700">[' + s + ']</span>' : '';
+  const sig = d.signature ? '<br><code style="font-size:10px;color:#adbac7">' + d.signature.replace(/</g,'&lt;').slice(0,120) + '</code>' : '';
+  const changed = changedSymbols(d);
+  const hint = changed.length ? '<br>double-click to ' + (expandedNodes.has(d.id) ? 'collapse' : 'expand (' + changed.length + ' changed)') : '';
+  tooltip.innerHTML = '<strong>' + shortLabel(d.label || d.id) + '</strong><span class="meta">' +
+    (d._type === 'symbol' ? (d.kind || 'symbol') : (d.path || d.id)) + badge + sig + hint + '</span>';
+  tooltip.classList.add('visible');
+  moveTooltip(event);
+}
+function moveTooltip(e) {
+  const wrap = document.getElementById('canvas-wrap').getBoundingClientRect();
+  let x = e.clientX - wrap.left + 12, y = e.clientY - wrap.top + 12;
+  if (x + 310 > wrap.width) x -= 320;
+  tooltip.style.left = x + 'px'; tooltip.style.top = y + 'px';
+}
+svg.node().addEventListener('mousemove', e => { if (tooltip.classList.contains('visible')) moveTooltip(e); });
+
+function fitView() {
+  const b = root.node().getBBox(); if (!b.width || !b.height) return;
+  const w = svg.node().clientWidth || 800, h = svg.node().clientHeight || 600;
+  const scale = Math.min(0.9, 0.9 / Math.max(b.width/w, b.height/h));
+  const tx = w/2 - scale*(b.x + b.width/2), ty = h/2 - scale*(b.y + b.height/2);
+  svg.transition().duration(500).call(zoom.transform, d3.zoomIdentity.translate(tx, ty).scale(scale));
+}
+document.getElementById('btn-fit').addEventListener('click', fitView);
+document.getElementById('btn-reset-expand').addEventListener('click', () => { expandedNodes.clear(); render(); });
+
+const evtSource = new EventSource('/events?i=' + encodeURIComponent(INSTANCE_ID));
+evtSource.onmessage = e => {
+  try { const d = JSON.parse(e.data); if (d.type === 'graph') { graphData = d.payload; render(); setTimeout(fitView, 600); } } catch (err) {}
+};
+
+render();
+if (graphData.nodes && graphData.nodes.length > 0) setTimeout(fitView, 600);
+</script>
+</body>
+</html>

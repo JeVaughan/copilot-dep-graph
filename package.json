@@ -1,0 +1,9 @@
+{
+  "name": "dep-graph",
+  "type": "module",
+  "dependencies": {
+    "tree-sitter": "^0.21.1",
+    "tree-sitter-go": "^0.21.2",
+    "tree-sitter-typescript": "^0.21.2"
+  }
+}
