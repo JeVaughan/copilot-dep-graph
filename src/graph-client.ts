@@ -78,20 +78,32 @@ let childrenByParent = new Map<string, GraphNode[]>();
 let groupSymbols = new Map<string, any[]>();
 let neighborsByNode = new Map<string, Set<string>>();
 let hullPaths = new Map<string, any>();
+// Ids touching at least one changed (non-"unchanged") edge, rebuilt once per render
+// from rawEdges — the same signal aggregate.mts's buildLinks uses internally, kept
+// here too so symbolCounts/visibleChildren-in-graph-client agree with it on what's
+// "edge-changed" for expand-tier purposes.
+let changedEdgeIds = new Set<string>();
+function hasChangedEdge(id: string): boolean { return changedEdgeIds.has(id); }
 
-// changed/unchanged/total counts for a container's direct symbol children, used to
-// decide the next expand level and to show a "+N hidden" badge on the node.
-function symbolCounts(containerId: string): { changed: number; unchanged: number; total: number } {
+// Own-changed/edge-changed/fully-unchanged/total counts for a container's direct
+// children, used to decide the next expand level and to show a "+N hidden" badge.
+function symbolCounts(containerId: string): { ownChanged: number; edgeChanged: number; fullyUnchanged: number; total: number } {
   const children = childrenByParent.get(containerId) ?? [];
-  const changed = visibleChildren(children, 1).length;
-  return { changed, unchanged: children.length - changed, total: children.length };
+  let ownChanged = 0, edgeChanged = 0, fullyUnchanged = 0;
+  for (const c of children) {
+    if (c.status && c.status !== 'unchanged') ownChanged++;
+    else if (hasChangedEdge(c.id)) edgeChanged++;
+    else fullyUnchanged++;
+  }
+  return { ownChanged, edgeChanged, fullyUnchanged, total: children.length };
 }
 
 // How many of a container's direct children aren't currently shown, at its current expand level.
 function hiddenCount(containerId: string): number {
   const { total } = symbolCounts(containerId);
   const level = expandLevel.get(containerId) ?? 0;
-  return total - visibleChildren(childrenByParent.get(containerId) ?? [], level).length;
+  const children = childrenByParent.get(containerId) ?? [];
+  return total - visibleChildren(children, level, hasChangedEdge).length;
 }
 
 const svg = d3.select('#svg');
@@ -165,6 +177,10 @@ function render() {
     if (!childrenByParent.has(n.parent)) childrenByParent.set(n.parent, []);
     childrenByParent.get(n.parent)!.push(n);
   }
+  changedEdgeIds = new Set<string>();
+  for (const e of rawEdges) {
+    if (e.status && e.status !== 'unchanged') { changedEdgeIds.add(e.src); changedEdgeIds.add(e.tar); }
+  }
 
   const fileNodes = rawNodes.filter(n => !n.parent);
 
@@ -206,7 +222,7 @@ function render() {
   // not just its immediate parent's.
   let frontier: { node: GraphNode; ancestors: string[] }[] = [];
   for (const n of fileNodes) {
-    for (const child of visibleChildren(childrenByParent.get(n.id) ?? [], expandLevel.get(n.id) ?? 0)) {
+    for (const child of visibleChildren(childrenByParent.get(n.id) ?? [], expandLevel.get(n.id) ?? 0, hasChangedEdge)) {
       frontier.push({ node: child, ancestors: [n.id] });
     }
   }
@@ -227,7 +243,7 @@ function render() {
         if (!groupSymbols.has(a)) groupSymbols.set(a, []);
         groupSymbols.get(a)!.push(sn);
       }
-      for (const child of visibleChildren(childrenByParent.get(n.id) ?? [], expandLevel.get(n.id) ?? 0)) {
+      for (const child of visibleChildren(childrenByParent.get(n.id) ?? [], expandLevel.get(n.id) ?? 0, hasChangedEdge)) {
         next.push({ node: child, ancestors: [...ancestors, n.id] });
       }
     }
@@ -462,9 +478,9 @@ function render() {
   // step with the shapes they're attached to instead of all being one fixed size.
   nodeSel.filter((d: any) => expandable(d)).each(function (this: any, d: any) {
     const level = expandLevel.get(d.id) ?? 0;
-    const { changed, unchanged } = symbolCounts(d.id);
+    const { ownChanged, edgeChanged, fullyUnchanged } = symbolCounts(d.id);
     const hidden = hiddenCount(d.id);
-    const collapsesNext = level > 0 && nextExpandLevel(level, changed, unchanged) === 0;
+    const collapsesNext = level > 0 && nextExpandLevel(level, ownChanged, edgeChanged, fullyUnchanged) === 0;
     if (hidden <= 0 && !collapsesNext) return;
 
     const g = d3.select(this);
@@ -638,8 +654,8 @@ function clearFocus() {
 
 function handleDblClick(d: any) {
   if (!expandable(d)) return;
-  const { changed, unchanged } = symbolCounts(d.id);
-  const next = nextExpandLevel(expandLevel.get(d.id) ?? 0, changed, unchanged);
+  const { ownChanged, edgeChanged, fullyUnchanged } = symbolCounts(d.id);
+  const next = nextExpandLevel(expandLevel.get(d.id) ?? 0, ownChanged, edgeChanged, fullyUnchanged);
   if (next === 0) expandLevel.delete(d.id); else expandLevel.set(d.id, next);
   render();
 }
@@ -647,13 +663,14 @@ function handleDblClick(d: any) {
 const tooltip = document.getElementById('tooltip')!;
 // What double-clicking this container would do next, or '' if it's not expandable at all.
 function expandHint(containerId: string): string {
-  const { changed, unchanged } = symbolCounts(containerId);
+  const { ownChanged, edgeChanged, fullyUnchanged } = symbolCounts(containerId);
   const current = expandLevel.get(containerId) ?? 0;
-  const next = nextExpandLevel(current, changed, unchanged);
+  const next = nextExpandLevel(current, ownChanged, edgeChanged, fullyUnchanged);
   if (next === current) return '';
   if (next === 0) return 'double-click to collapse';
-  if (next === 1) return 'double-click to expand (' + changed + ' changed)';
-  return 'double-click to show ' + unchanged + ' unchanged';
+  if (next === 1) return 'double-click to expand (' + ownChanged + ' changed)';
+  if (next === 2) return 'double-click to show ' + edgeChanged + ' with a changed edge';
+  return 'double-click to show ' + fullyUnchanged + ' unchanged';
 }
 
 function showTooltip(event: MouseEvent, d: any) {

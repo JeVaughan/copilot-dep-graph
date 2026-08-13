@@ -5,8 +5,10 @@
 
 import type { GraphNode, GraphEdge } from "./types.mjs";
 
-// A file's expand level: 0 = collapsed, 1 = changed symbols only, 2 = all symbols
-// (changed + unchanged). Absent from the map is equivalent to 0.
+// A container's expand level: 0 = collapsed, 1 = own-status-changed children only,
+// 2 = also children that are themselves unchanged but touch a changed edge, 3 =
+// everything (also fully unchanged children with no changed edge either). Absent
+// from the map is equivalent to 0.
 export type ExpandLevels = Map<string, number>;
 
 const TYPE_PRIORITY = ["call", "reference", "import", "sibling"];
@@ -26,22 +28,43 @@ export function aggregateStatus(statuses: Set<string>): string | null {
   return "modified";
 }
 
-// Which of a file's symbol children are visible at a given expand level: none at 0,
-// only changed (non-"unchanged") ones at 1, everything at 2+.
-export function visibleChildren(children: GraphNode[], level: number): GraphNode[] {
-  if (level <= 0) return [];
-  if (level >= 2) return children;
-  return children.filter(c => c.status && c.status !== "unchanged");
+// Which node ids touch at least one changed (non-"unchanged") edge — the minimal
+// signal visibleChildren's middle tier needs. Deliberately just a Set<id> (not each
+// node's actual aggregate status — nothing here needs that) and computed from the
+// full edge set, not whatever's currently rendered, so it can't circularly depend on
+// the current expand state.
+function nodesWithChangedEdge(edges: GraphEdge[]): Set<string> {
+  const ids = new Set<string>();
+  for (const e of edges) {
+    if (e.status && e.status !== "unchanged") { ids.add(e.src); ids.add(e.tar); }
+  }
+  return ids;
 }
 
-// Cycles a file's expand level: 0 (collapsed) -> 1 (changed only) -> 2 (all) -> 0,
+// Which of a container's direct children are visible at a given expand level: none at
+// 0; own-status changed (added/modified/removed) at 1; also unchanged-status children
+// that touch a changed edge at 2; everything (also fully unchanged ones) at 3+.
+export function visibleChildren(children: GraphNode[], level: number, hasChangedEdge: (id: string) => boolean): GraphNode[] {
+  if (level <= 0) return [];
+  if (level >= 3) return children;
+  return children.filter(c => {
+    const ownChanged = c.status && c.status !== "unchanged";
+    return level === 1 ? ownChanged : ownChanged || hasChangedEdge(c.id);
+  });
+}
+
+// Cycles a container's expand level: 0 (collapsed) -> 1 (own-status changed) ->
+// 2 (+ unchanged children touching a changed edge) -> 3 (+ everything else) -> 0,
 // skipping any level that wouldn't actually add anything new to what's already shown.
-// E.g. an all-added file has no unchanged symbols, so 1 goes straight back to 0; a file
-// with no changed symbols (only unchanged) skips 1 entirely, going straight from 0 to 2.
-export function nextExpandLevel(current: number, changedCount: number, unchangedCount: number): number {
-  if (changedCount === 0 && unchangedCount === 0) return current;
-  if (current === 0) return changedCount > 0 ? 1 : 2;
-  if (current === 1) return unchangedCount > 0 ? 2 : 0;
+// E.g. a container with no own-changed children but some edge-touching ones skips
+// level 1, going straight from 0 to 2; one with nothing but fully unchanged, unrelated
+// children skips straight to 3 — that bottom tier only ever shows once nothing else
+// is left to reveal.
+export function nextExpandLevel(current: number, ownChangedCount: number, edgeChangedCount: number, fullyUnchangedCount: number): number {
+  const countAtLevel = [ownChangedCount, edgeChangedCount, fullyUnchangedCount];
+  for (let level = current + 1; level <= 3; level++) {
+    if (countAtLevel[level - 1] > 0) return level;
+  }
   return 0;
 }
 
@@ -60,15 +83,17 @@ function groupByParent(nodes: GraphNode[]): Map<string, GraphNode[]> {
 // level. A node several levels deep (e.g. a method on a class) is visible only when
 // every ancestor between it and the root is itself visible AND expanded enough to
 // reveal it; a container that's hidden or collapsed hides its whole subtree.
-export function computeVisibleNodeIds(nodes: GraphNode[], expandLevels: ExpandLevels): Set<string> {
+export function computeVisibleNodeIds(nodes: GraphNode[], edges: GraphEdge[], expandLevels: ExpandLevels): Set<string> {
   const childrenByParent = groupByParent(nodes);
+  const changedEdgeIds = nodesWithChangedEdge(edges);
+  const hasChangedEdge = (id: string) => changedEdgeIds.has(id);
   const visible = new Set<string>();
   const queue: GraphNode[] = nodes.filter(n => !n.parent);
   for (const n of queue) visible.add(n.id);
   while (queue.length) {
     const parent = queue.shift()!;
     const level = expandLevels.get(parent.id) ?? 0;
-    for (const c of visibleChildren(childrenByParent.get(parent.id) ?? [], level)) {
+    for (const c of visibleChildren(childrenByParent.get(parent.id) ?? [], level, hasChangedEdge)) {
       visible.add(c.id);
       queue.push(c);
     }
@@ -101,7 +126,7 @@ interface Group { src: string; tar: string; count: number; types: Set<string>; s
 // instead of rendering as two separate, differently-coloured edges.
 export function buildLinks(nodes: GraphNode[], edges: GraphEdge[], expandLevels: ExpandLevels): GraphEdge[] {
   const nodeMeta = new Map(nodes.map(n => [n.id, n]));
-  const visible = computeVisibleNodeIds(nodes, expandLevels);
+  const visible = computeVisibleNodeIds(nodes, edges, expandLevels);
   const groups = new Map<string, Group>();
 
   function add(src: string, tar: string, type: string, status: string | null | undefined) {

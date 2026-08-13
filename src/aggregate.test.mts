@@ -6,33 +6,46 @@ function node(id, type, parent, status) {
   return parent ? { id, type, parent, status } : { id, type, status };
 }
 
-test("visibleChildren: none at 0, changed only at 1, everything at 2", () => {
+test("visibleChildren: none at 0, own-changed at 1, +edge-changed at 2, everything at 3", () => {
   const children = [
-    { id: "a", status: "unchanged" },
-    { id: "b", status: "added" },
-    { id: "c", status: "removed" },
+    { id: "a", status: "unchanged" }, // fully unchanged
+    { id: "b", status: "added" },     // own-changed
+    { id: "c", status: "removed" },   // own-changed
+    { id: "d", status: "unchanged" }, // unchanged status, but touches a changed edge
   ];
-  assert.deepEqual(visibleChildren(children, 0), []);
-  assert.deepEqual(visibleChildren(children, 1).map(c => c.id), ["b", "c"]);
-  assert.deepEqual(visibleChildren(children, 2).map(c => c.id), ["a", "b", "c"]);
+  const hasChangedEdge = (id) => id === "d";
+
+  assert.deepEqual(visibleChildren(children, 0, hasChangedEdge), []);
+  assert.deepEqual(visibleChildren(children, 1, hasChangedEdge).map(c => c.id), ["b", "c"]);
+  assert.deepEqual(visibleChildren(children, 2, hasChangedEdge).map(c => c.id), ["b", "c", "d"]);
+  assert.deepEqual(visibleChildren(children, 3, hasChangedEdge).map(c => c.id), ["a", "b", "c", "d"]);
 });
 
-test("nextExpandLevel: normal cycle 0 -> 1 -> 2 -> 0 when both changed and unchanged exist", () => {
-  assert.equal(nextExpandLevel(0, 2, 3), 1);
-  assert.equal(nextExpandLevel(1, 2, 3), 2);
-  assert.equal(nextExpandLevel(2, 2, 3), 0);
+test("nextExpandLevel: normal cycle 0 -> 1 -> 2 -> 3 -> 0 when all three tiers exist", () => {
+  assert.equal(nextExpandLevel(0, 2, 1, 3), 1);
+  assert.equal(nextExpandLevel(1, 2, 1, 3), 2);
+  assert.equal(nextExpandLevel(2, 2, 1, 3), 3);
+  assert.equal(nextExpandLevel(3, 2, 1, 3), 0);
 });
 
-test("nextExpandLevel: skips level 1 when there are no changed symbols (goes straight to 2)", () => {
-  assert.equal(nextExpandLevel(0, 0, 5), 2);
+test("nextExpandLevel: skips level 1 when there are no own-changed children (goes straight to 2)", () => {
+  assert.equal(nextExpandLevel(0, 0, 4, 5), 2);
 });
 
-test("nextExpandLevel: skips level 2 when there are no unchanged symbols (collapses from 1)", () => {
-  assert.equal(nextExpandLevel(1, 5, 0), 0);
+test("nextExpandLevel: skips level 2 when there are no edge-changed children (goes straight to 3)", () => {
+  assert.equal(nextExpandLevel(1, 5, 0, 4), 3);
 });
 
-test("nextExpandLevel: a file with no symbols at all never expands", () => {
-  assert.equal(nextExpandLevel(0, 0, 0), 0);
+test("nextExpandLevel: skips straight to 3 when only fully-unchanged children exist", () => {
+  assert.equal(nextExpandLevel(0, 0, 0, 5), 3);
+});
+
+test("nextExpandLevel: skips level 3 when there are no fully-unchanged children (collapses from 2)", () => {
+  assert.equal(nextExpandLevel(2, 5, 3, 0), 0);
+});
+
+test("nextExpandLevel: a container with no children at all never expands", () => {
+  assert.equal(nextExpandLevel(0, 0, 0, 0), 0);
 });
 
 test("computeVisibleNodeIds: files always visible, symbols only when expanded and changed", () => {
@@ -44,14 +57,37 @@ test("computeVisibleNodeIds: files always visible, symbols only when expanded an
     node("b.ts:::newFn", "function", "b.ts", "added"),
   ];
 
-  const collapsed = computeVisibleNodeIds(nodes, new Map());
+  const collapsed = computeVisibleNodeIds(nodes, [], new Map());
   assert.deepEqual([...collapsed].sort(), ["a.ts", "b.ts"]);
 
-  const aChangedOnly = computeVisibleNodeIds(nodes, new Map([["a.ts", 1]]));
+  const aChangedOnly = computeVisibleNodeIds(nodes, [], new Map([["a.ts", 1]]));
   assert.deepEqual([...aChangedOnly].sort(), ["a.ts", "a.ts:::changedFn", "b.ts"]);
 
-  const aAll = computeVisibleNodeIds(nodes, new Map([["a.ts", 2]]));
+  const aAll = computeVisibleNodeIds(nodes, [], new Map([["a.ts", 3]]));
   assert.deepEqual([...aAll].sort(), ["a.ts", "a.ts:::changedFn", "a.ts:::unchangedFn", "b.ts"]);
+});
+
+test("computeVisibleNodeIds: an unchanged-status symbol touching a changed edge shows at level 2, before fully-unchanged siblings at level 3", () => {
+  const nodes = [
+    node("a.ts", "file", undefined, "modified"),
+    node("a.ts:::edgeTouched", "function", "a.ts", "unchanged"),
+    node("a.ts:::untouched", "function", "a.ts", "unchanged"),
+    node("b.ts", "file", undefined, "added"),
+    node("b.ts:::caller", "function", "b.ts", "added"),
+  ];
+  const edges = [
+    { src: "b.ts:::caller", tar: "a.ts:::edgeTouched", type: "call", status: "added", count: 1 },
+  ];
+
+  const level1 = computeVisibleNodeIds(nodes, edges, new Map([["a.ts", 1]]));
+  assert.ok(!level1.has("a.ts:::edgeTouched"), "not own-changed, so not visible yet at level 1");
+
+  const level2 = computeVisibleNodeIds(nodes, edges, new Map([["a.ts", 2]]));
+  assert.ok(level2.has("a.ts:::edgeTouched"), "touches a changed edge, so visible at level 2");
+  assert.ok(!level2.has("a.ts:::untouched"), "no changed edge and no own change, so still hidden at level 2");
+
+  const level3 = computeVisibleNodeIds(nodes, edges, new Map([["a.ts", 3]]));
+  assert.ok(level3.has("a.ts:::untouched"), "fully unchanged children only show once everything else has been revealed");
 });
 
 test("buildLinks merges edges of the SAME type with different statuses (unchanged + added -> added)", () => {
@@ -147,19 +183,20 @@ test("computeVisibleNodeIds: a grandchild is visible only when every ancestor is
     node("a.ts:::Widget:::old", "method", "a.ts:::Widget", "unchanged"),
   ];
 
-  assert.deepEqual([...computeVisibleNodeIds(nodes, new Map())].sort(), ["a.ts"]);
+  assert.deepEqual([...computeVisibleNodeIds(nodes, [], new Map())].sort(), ["a.ts"]);
 
   // File expanded, but the class itself isn't expanded: Widget shows, its methods don't.
-  const fileOnly = computeVisibleNodeIds(nodes, new Map([["a.ts", 1]]));
+  const fileOnly = computeVisibleNodeIds(nodes, [], new Map([["a.ts", 1]]));
   assert.deepEqual([...fileOnly].sort(), ["a.ts", "a.ts:::Widget"]);
 
-  // File and class both expanded to "changed only": the changed method shows, the
+  // File and class both expanded to "own-changed only": the changed method shows, the
   // unchanged one doesn't.
-  const both1 = computeVisibleNodeIds(nodes, new Map([["a.ts", 1], ["a.ts:::Widget", 1]]));
+  const both1 = computeVisibleNodeIds(nodes, [], new Map([["a.ts", 1], ["a.ts:::Widget", 1]]));
   assert.deepEqual([...both1].sort(), ["a.ts", "a.ts:::Widget", "a.ts:::Widget:::run"]);
 
-  // Class expanded to "all": both methods show.
-  const both2 = computeVisibleNodeIds(nodes, new Map([["a.ts", 1], ["a.ts:::Widget", 2]]));
+  // Class expanded to "everything" (no edges here, so the unchanged method is fully
+  // unchanged and only shows at level 3, not 2).
+  const both2 = computeVisibleNodeIds(nodes, [], new Map([["a.ts", 1], ["a.ts:::Widget", 3]]));
   assert.deepEqual([...both2].sort(), ["a.ts", "a.ts:::Widget", "a.ts:::Widget:::old", "a.ts:::Widget:::run"]);
 });
 
