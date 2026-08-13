@@ -87,19 +87,21 @@ const root = d3.select('#root');
 const zoom = d3.zoom().scaleExtent([0.1, 8]).on('zoom', (e: any) => root.attr('transform', e.transform));
 svg.call(zoom).on('dblclick.zoom', null);
 const defs = svg.append('defs');
+// Opacity matches the corresponding .link[.status] stroke-opacity in graph.html,
+// so an arrowhead doesn't look like a solid, opaque cap on a faint line.
 [
-  { id: 'arrow', color: '#8b949e' },
-  { id: 'arrow-added', color: '#56d364' },
-  { id: 'arrow-modified', color: '#e3b341' },
-  { id: 'arrow-removed', color: '#f85149' },
-].forEach(({ id, color }) => {
+  { id: 'arrow', color: '#8b949e', opacity: 0.45 },
+  { id: 'arrow-added', color: '#56d364', opacity: 0.35 },
+  { id: 'arrow-modified', color: '#e3b341', opacity: 0.35 },
+  { id: 'arrow-removed', color: '#f85149', opacity: 0.30 },
+].forEach(({ id, color, opacity }) => {
   defs.append('marker')
     .attr('id', id).attr('viewBox', '0 -4 8 8')
     .attr('refX', 18).attr('refY', 0).attr('markerWidth', 4).attr('markerHeight', 4).attr('orient', 'auto')
-    .append('path').attr('d', 'M0,-4L8,0L0,4').attr('fill', color);
+    .append('path').attr('d', 'M0,-4L8,0L0,4').attr('fill', color).attr('fill-opacity', opacity);
 });
 
-let linkSel: any, nodeSel: any;
+let linkSel: any, nodeSel: any, labelSel: any;
 
 function render() {
   const { nodes: rawNodes, edges: rawEdges } = graphData;
@@ -327,8 +329,7 @@ function render() {
     .attr('r', 4).attr('fill', (d: any) => nodeColor(d)).attr('stroke', 'none');
 
   nodeSel.filter((d: any) => d._type === 'file' && !d._expanded).append('circle')
-    .attr('r', 10).attr('fill', (d: any) => nodeColor(d))
-    .attr('stroke', '#fff').attr('stroke-width', 1.5);
+    .attr('r', 10).attr('fill', (d: any) => nodeColor(d)).attr('stroke', 'none');
 
   nodeSel.filter((d: any) => d._type === 'symbol').each(function (this: any, d: any) {
     const g = d3.select(this);
@@ -346,22 +347,21 @@ function render() {
     }
   });
 
-  nodeSel.filter((d: any) => d._type === 'file').append('text').attr('class', 'label')
-    .attr('x', (d: any) => d._expanded ? 0 : 14)
-    .attr('y', (d: any) => d._expanded ? -14 : 0)
-    .attr('text-anchor', (d: any) => d._expanded ? 'middle' : 'start')
-    .attr('fill', (d: any) => d._expanded ? '#7d8590' : '#e6edf3')
+  // Labels get their own top-level group, appended after .nodes, so every
+  // label always renders in front of every node (not just its own).
+  root.selectAll('.labels').remove();
+  labelSel = root.append('g').attr('class', 'labels')
+    .selectAll('text').data(allNodes).join('text')
+    .attr('class', (d: any) => 'label ' + (d._type === 'symbol' ? 'symbol' : 'file'))
+    .attr('x', 0).attr('y', -14).attr('text-anchor', 'middle')
+    .style('fill', (d: any) => d._type === 'file' && d._expanded ? '#7d8590' : null)
     .text((d: any) => d.label ?? shortLabel(d.id));
-
-  nodeSel.filter((d: any) => d._type === 'symbol').append('text')
-    .attr('class', 'label').attr('x', 10).attr('y', 0)
-    .text((d: any) => d.label ?? shortLabel(d.id));
-
 
   simulation.on('tick', () => {
     linkSel.attr('x1', (d: any) => d.source.x).attr('y1', (d: any) => d.source.y)
             .attr('x2', (d: any) => d.target.x).attr('y2', (d: any) => d.target.y);
     nodeSel.attr('transform', (d: any) => 'translate(' + (d.x || 0) + ',' + (d.y || 0) + ')');
+    labelSel.attr('transform', (d: any) => 'translate(' + (d.x || 0) + ',' + (d.y || 0) + ')');
     groupSymbols.forEach((syms, pid) => {
       const p = nodeById.get(pid);
       if (p) hullPaths.get(pid).attr('d', hullPath([[p.x, p.y]].concat(syms.map(s => [s.x, s.y])), 22));

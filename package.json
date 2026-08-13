@@ -20,7 +20,7 @@
     "build": "tsc -p tsconfig.json && tsc -p tsconfig.browser.json",
     "prepare": "npm run build",
     "watch": "tsc -p tsconfig.json --watch",
-    "test": "npm run build && node --test \"test/*.test.mts\"",
+    "test": "npm run build && node --test \"src/*.test.mts\"",
     "dev": "npm run build && node dev/serve.mts"
   },
   "dependencies": {

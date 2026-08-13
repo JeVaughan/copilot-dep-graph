@@ -125,12 +125,14 @@ Edge type (import / call / reference / sibling) is not shown as a distinct line 
 ```
 dep-graph-core/
 ├── src/
-│   ├── index.mts        # Public API barrel
-│   ├── parse.mts         # parsePr: git diff + tree-sitter → graph data
-│   ├── treesitter.mts    # AST extraction (TypeScript + Go)
-│   ├── viewer.mts        # Local HTTP/SSE server serving the D3 UI
-│   └── graph-client.ts   # Browser-side D3 force graph renderer
-├── test/                 # node:test suite, runs against the built dist/
+│   ├── index.mts          # Public API barrel
+│   ├── parse.mts          # parsePr: git diff + tree-sitter → graph data
+│   ├── parse.test.mts     # node:test suite for parse.mts, runs against the built dist/
+│   ├── treesitter.mts     # AST extraction (TypeScript + Go)
+│   ├── treesitter.test.mts
+│   ├── viewer.mts         # Local HTTP/SSE server serving the D3 UI
+│   ├── viewer.test.mts
+│   └── graph-client.ts    # Browser-side D3 force graph renderer
 ├── dev/serve.mts         # Manual dev harness (not published)
 ├── graph.html            # D3 force graph UI shell (loads /graph-client.js)
 ├── d3.min.js             # Bundled D3 v7 (no CDN)
