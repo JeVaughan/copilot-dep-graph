@@ -4,9 +4,14 @@
 //
 // Usage:
 //   npm run dev
-//   npm run dev -- --repo /path/to/repo [--pr HEAD] [--base HEAD~1] [--exclude foo,bar]
+//   npm run dev -- --repo /path/to/repo [--pr HEAD] [--base HEAD~1] [--exclude foo,bar] [--port 4500]
+//
+// Binds a stable port (4500) by default so the URL/port-forward doesn't
+// change across restarts. Pass --port to use a different one.
 
 import { parsePr, startViewer, type GraphData } from "../dist/index.mjs";
+
+const DEFAULT_PORT = 4500;
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
@@ -17,6 +22,7 @@ const repoPath = arg("repo");
 const prRef = arg("pr") ?? "HEAD";
 const baseRef = arg("base") ?? "HEAD~1";
 const excludeArg = arg("exclude");
+const port = Number(arg("port") ?? DEFAULT_PORT);
 
 let graph: GraphData;
 
@@ -49,6 +55,15 @@ if (repoPath) {
   };
 }
 
-const viewer = await startViewer(graph);
+let viewer;
+try {
+  viewer = await startViewer(graph, { port });
+} catch (err: any) {
+  if (err?.code === "EADDRINUSE") {
+    console.error(`\nPort ${port} is already in use — is another dev server already running? Pass --port to use a different one.\n`);
+    process.exit(1);
+  }
+  throw err;
+}
 console.log(`\nOpen in a browser: ${viewer.url}\n`);
 console.log("Press Ctrl+C to stop.");

@@ -150,11 +150,12 @@ npm test         # runs the node:test suite against the built dist/
 
 ### Trying it out in a browser
 
-`npm run dev` starts the D3 viewer with sample data and prints a URL to open. Pass `--repo` to parse a real PR diff instead:
+`npm run dev` starts the D3 viewer with sample data and prints a URL to open. Pass `--repo` to parse a real PR diff instead. It binds a stable port (4500) by default, so a port-forward set up once (e.g. in a remote/devcontainer session) keeps working across restarts — pass `--port` to use a different one:
 
 ```bash
 npm run dev
 npm run dev -- --repo /path/to/repo --pr HEAD --base main
+npm run dev -- --port 4501
 ```
 
 ## License

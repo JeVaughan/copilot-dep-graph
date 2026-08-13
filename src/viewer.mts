@@ -34,8 +34,14 @@ function renderClientJs(graphData: GraphData | undefined): string {
     return tpl.replace('__GRAPH_DATA__', dataJson);
 }
 
-export function startViewer(initialGraph?: GraphData): Promise<Viewer> {
-    return new Promise((resolve) => {
+export interface StartViewerOptions {
+  // Fixed port to bind to. Omit (or pass 0) for an OS-assigned ephemeral
+  // port — the safe default when multiple viewers might run concurrently.
+  port?: number;
+}
+
+export function startViewer(initialGraph?: GraphData, options?: StartViewerOptions): Promise<Viewer> {
+    return new Promise((resolve, reject) => {
         const sseClients = new Set<ServerResponse>();
         let graphData: GraphData = initialGraph ?? { nodes: [], edges: [], title: "Dependency Graph" };
 
@@ -71,7 +77,9 @@ export function startViewer(initialGraph?: GraphData): Promise<Viewer> {
             res.end(renderHtml(graphData));
         });
 
-        server.listen(0, "127.0.0.1", () => {
+        server.once("error", reject);
+        server.listen(options?.port ?? 0, "127.0.0.1", () => {
+            server.removeListener("error", reject);
             const { port } = server.address() as AddressInfo;
             resolve({
                 url: `http://127.0.0.1:${port}/`,
