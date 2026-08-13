@@ -179,12 +179,12 @@ npm test         # runs the node:test suite against the built dist/
 
 ### Trying it out in a browser
 
-`npm run dev` starts the D3 viewer with sample data and prints a URL to open. Pass `--repo` to parse a real PR diff instead, or `--sample <name>` to run against a checked-in fixture under [samples/](samples/) (e.g. `class-methods`, which exercises added/modified/removed files and nested class methods). It binds a stable port (4500) by default, so a port-forward set up once (e.g. in a remote/devcontainer session) keeps working across restarts — pass `--port` to use a different one:
+`npm run dev` starts the D3 viewer with sample data and prints a URL to open. Pass `--repo` to parse a real PR diff instead, or `--sample <name>` to run against a checked-in fixture under [samples/](samples/) (e.g. `typescript-small`, which exercises added/modified/removed files and nested class methods, or `typescript-medium`, which adds removed edges and mixed changed/unchanged children). It binds a stable port (4500) by default, so a port-forward set up once (e.g. in a remote/devcontainer session) keeps working across restarts — pass `--port` to use a different one:
 
 ```bash
 npm run dev
 npm run dev -- --repo /path/to/repo --pr HEAD --base main
-npm run dev -- --sample class-methods
+npm run dev -- --sample typescript-small
 npm run dev -- --port 4501
 ```
 

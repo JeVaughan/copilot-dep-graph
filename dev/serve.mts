@@ -5,7 +5,7 @@
 // Usage:
 //   npm run dev
 //   npm run dev -- --repo /path/to/repo [--pr HEAD] [--base HEAD~1] [--exclude foo,bar] [--port 4500]
-//   npm run dev -- --sample class-methods
+//   npm run dev -- --sample typescript-small
 //
 // Binds a stable port (4500) by default so the URL/port-forward doesn't
 // change across restarts. Pass --port to use a different one.
