@@ -72,6 +72,12 @@ let simulation: any = null;
 // list, so collapsed/never-expanded symbols can still be resolved.
 let nodeMeta = new Map<string, GraphNode>();
 let childrenByParent = new Map<string, GraphNode[]>();
+// Rebuilt each render(); read by the hover-focus logic below (focusNode/clearFocus),
+// which runs later, on mouseenter/mouseleave — so these need to survive past the
+// render() call that built them, not just live as locals inside it.
+let groupSymbols = new Map<string, any[]>();
+let neighborsByNode = new Map<string, Set<string>>();
+let hullPaths = new Map<string, any>();
 
 // changed/unchanged/total counts for a container's direct symbol children, used to
 // decide the next expand level and to show a "+N hidden" badge on the node.
@@ -168,7 +174,7 @@ function render() {
   // exempt that whole subtree from being repelled by an ancestor container's boundary
   // (see forceGroup below). A class nested in an expanded file gets its own entry here
   // alongside the file's, so hulls nest visually the same way the containers do.
-  const groupSymbols = new Map<string, any[]>();
+  groupSymbols = new Map<string, any[]>();
   // containerId -> its own nesting depth (0 for a file), so each container's hull can
   // pad itself down by the same depthScale() as its members' glyphs — an outer file
   // hull stays roomy, a hull nested a level deeper draws tighter around its contents.
@@ -242,13 +248,19 @@ function render() {
   document.getElementById('stats')!.textContent =
     `Nodes ${allNodes.length}/${rawNodes.length} · Edges ${allLinks.length}/${rawEdges.length}`;
 
-  // Degree map for charge scaling, and each node's incident-edge statuses for its
-  // border colour below — both read here before D3 mutates source/target to objects.
+  // Degree map for charge scaling, each node's incident-edge statuses for its border
+  // colour, and each node's direct neighbours for hover-focus below — all read here
+  // before D3 mutates source/target to objects.
   const degreeMap = new Map<string, number>();
   const edgeStatusesByNode = new Map<string, Set<string>>();
+  neighborsByNode = new Map<string, Set<string>>();
   function addEdgeStatus(nodeId: string, status: string | null | undefined) {
     if (!edgeStatusesByNode.has(nodeId)) edgeStatusesByNode.set(nodeId, new Set());
     edgeStatusesByNode.get(nodeId)!.add(status ?? 'unchanged');
+  }
+  function addNeighbor(a: string, b: string) {
+    if (!neighborsByNode.has(a)) neighborsByNode.set(a, new Set());
+    neighborsByNode.get(a)!.add(b);
   }
   for (const l of allLinks) {
     const s = l.source, t = l.target;
@@ -256,6 +268,8 @@ function render() {
     degreeMap.set(t, (degreeMap.get(t) || 0) + 1);
     addEdgeStatus(s, l.status);
     addEdgeStatus(t, l.status);
+    addNeighbor(s, t);
+    addNeighbor(t, s);
   }
   // A node's border colour: the aggregate of every currently-rendered edge touching
   // it (same aggregateStatus() aggregate.mts uses to collapse several raw edges into
@@ -348,13 +362,21 @@ function render() {
 
   root.selectAll('.hull-layer').remove();
   const hullLayer = root.insert('g', ':first-child').attr('class', 'hull-layer');
-  const hullPaths = new Map<string, any>();
+  hullPaths = new Map<string, any>();
   for (const pid of groupSymbols.keys()) {
     const col = hullColor(containerDepth.get(pid) ?? 0);
+    // pointer-events is left at its default (painted area is hoverable) rather than
+    // 'none', so hovering the fuzzy container area itself — not just its node glyph —
+    // triggers focusContainerArea's stricter highlighting (see its comment) for this
+    // hull's own container id. Nested hulls are appended shallowest-first (see
+    // groupSymbols' insertion order), so a more deeply nested hull paints on top and
+    // correctly wins the hover in the region where it overlaps its ancestor's.
     hullPaths.set(pid, hullLayer.append('path')
       .style('fill', col).style('fill-opacity', '0.07')
       .style('stroke', col).style('stroke-opacity', '0.35')
-      .style('stroke-width', '1.5').style('pointer-events', 'none'));
+      .style('stroke-width', '1.5')
+      .on('mouseenter', () => focusContainerArea(pid))
+      .on('mouseleave', () => clearFocus()));
   }
 
   // A gradient per link (userSpaceOnUse, positioned to the line's actual endpoints
@@ -390,8 +412,8 @@ function render() {
     })
     .attr('stroke', (_d: any, i: number) => 'url(#link-grad-' + i + ')')
     .attr('stroke-width', (d: any) => linkWidth(d.count ?? 1))
-    .on('mouseenter', (e: any, d: any) => showLinkTooltip(e, d))
-    .on('mouseleave', () => tooltip.classList.remove('visible'));
+    .on('mouseenter', (e: any, d: any) => { showLinkTooltip(e, d); focusEdge(d); })
+    .on('mouseleave', () => { tooltip.classList.remove('visible'); clearFocus(); });
 
   root.selectAll('.nodes').remove();
   nodeSel = root.append('g').attr('class', 'nodes')
@@ -402,8 +424,8 @@ function render() {
       .on('drag',  (e: any, d: any) => { d.fx = e.x; d.fy = e.y; })
       .on('end',   (e: any, d: any) => { if (!e.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; }))
     .on('dblclick', (e: any, d: any) => { e.stopPropagation(); handleDblClick(d); })
-    .on('mouseenter', (e: any, d: any) => showTooltip(e, d))
-    .on('mouseleave', () => tooltip.classList.remove('visible'));
+    .on('mouseenter', (e: any, d: any) => { showTooltip(e, d); focusNode(d.id); })
+    .on('mouseleave', () => { tooltip.classList.remove('visible'); clearFocus(); });
 
   nodeSel.filter((d: any) => d._type === 'file').append('circle')
     .attr('r', 10).attr('fill', (d: any) => nodeColor(d))
@@ -531,6 +553,87 @@ function hullColor(depth: number): string {
 // children of its own.
 function expandable(d: any): boolean {
   return symbolCounts(d.id).total > 0;
+}
+
+const HOVER_DIM_OPACITY = 0.12;
+
+// Every id "related" to a hovered node's own GLYPH, for dimming purposes: itself, its
+// direct neighbours (via a currently-rendered edge), its ancestor chain (the
+// container(s) it lives inside — so you can still see which file/class you're in),
+// and its own members if it's itself a container. Applies uniformly regardless of
+// node kind — hovering a class's glyph is exactly as generous as hovering a method's.
+function relatedNodeIds(hoveredId: string): Set<string> {
+  const related = new Set<string>([hoveredId]);
+  for (const n of (neighborsByNode.get(hoveredId) ?? [])) related.add(n);
+  for (let cur = nodeMeta.get(hoveredId); cur?.parent; cur = nodeMeta.get(cur.parent)) related.add(cur.parent);
+  for (const desc of (groupSymbols.get(hoveredId) ?? [])) related.add(desc.id);
+  return related;
+}
+
+// A hovered id's own ancestor chain, plus itself — the containers that actually
+// contain it. Used two ways: (1) as the set of hulls that stay bright no matter which
+// of the above two hover modes triggered — a container should only stay bright
+// because the hovered thing lives inside it, never because it merely contains some
+// other related node; (2) as the *entire* related set when hovering a container's
+// AREA (its hull) rather than its glyph — see focusContainerArea.
+function ancestorIds(hoveredId: string): Set<string> {
+  const ancestors = new Set<string>([hoveredId]);
+  for (let cur = nodeMeta.get(hoveredId); cur?.parent; cur = nodeMeta.get(cur.parent)) ancestors.add(cur.parent);
+  return ancestors;
+}
+
+// Shared dimming mechanics for both hover modes below: nodeRelated decides which
+// nodes/labels stay bright, hullRelated which container hulls do, edgeIsBright which
+// links do. Everything else darkens to HOVER_DIM_OPACITY.
+//
+// A link also loses its fade-toward-midpoint gradient for the duration of any hover —
+// both when highlighted and when dimmed, it renders as a flat, evenly-opaque line
+// (at its normal peak status opacity, then further scaled by the opacity toggle below
+// if dimmed) instead of the gradient's varying one. clearFocus() restores the gradient.
+function applyDimming(nodeRelated: Set<string>, hullRelated: Set<string>, edgeIsBright: (d: any) => boolean) {
+  nodeSel.style('opacity', (d: any) => nodeRelated.has(d.id) ? null : HOVER_DIM_OPACITY);
+  labelSel.style('opacity', (d: any) => nodeRelated.has(d.id) ? null : HOVER_DIM_OPACITY);
+  linkSel
+    .attr('stroke', (d: any) => STATUS_COLOR[d.status ?? 'unchanged'])
+    .attr('stroke-opacity', (d: any) => STATUS_OPACITY[d.status ?? 'unchanged'])
+    .style('opacity', (d: any) => edgeIsBright(d) ? null : HOVER_DIM_OPACITY);
+  hullPaths.forEach((path: any, containerId: string) => {
+    path.style('opacity', hullRelated.has(containerId) ? null : HOVER_DIM_OPACITY);
+  });
+}
+
+// Hovering a node's own glyph (file, class, or leaf symbol alike): the generous rule.
+// An edge stays bright if it touches the hovered node directly, or touches one of its
+// members when the hovered node is itself a container.
+function focusNode(hoveredId: string) {
+  const subtree = new Set<string>([hoveredId, ...(groupSymbols.get(hoveredId) ?? []).map((n: any) => n.id)]);
+  applyDimming(relatedNodeIds(hoveredId), ancestorIds(hoveredId),
+    (d: any) => subtree.has(d.source.id) || subtree.has(d.target.id));
+}
+
+// Hovering a container's AREA — its hull, not its glyph. Deliberately the strict
+// rule: only the container itself and its ancestor chain light up, so you can quickly
+// identify what contains it without every member or neighbour also staying bright.
+// No edge stays bright in this mode, even one touching the container's own node —
+// hovering the area is about the containment relationship, not the container's edges.
+function focusContainerArea(containerId: string) {
+  const ancestorsOrSelf = ancestorIds(containerId);
+  applyDimming(ancestorsOrSelf, ancestorsOrSelf, () => false);
+}
+
+// Hovering an edge itself: only it and its two endpoint nodes stay bright — no
+// ancestors, no hulls, nothing else. Tighter than either node-hover mode above.
+// Identity (===) is enough to pick out "this exact edge" since d is the same object
+// reference bound to linkSel throughout the current render.
+function focusEdge(hovered: any) {
+  applyDimming(new Set<string>([hovered.source.id, hovered.target.id]), new Set<string>(), (d: any) => d === hovered);
+}
+
+function clearFocus() {
+  nodeSel.style('opacity', null);
+  labelSel.style('opacity', null);
+  linkSel.style('opacity', null).attr('stroke', (_d: any, i: number) => 'url(#link-grad-' + i + ')').attr('stroke-opacity', null);
+  hullPaths.forEach((path: any) => path.style('opacity', null));
 }
 
 function handleDblClick(d: any) {
