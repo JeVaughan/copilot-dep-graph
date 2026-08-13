@@ -378,14 +378,13 @@ function moveTooltip(e: MouseEvent) {
   tooltip.style.left = x + 'px'; tooltip.style.top = y + 'px';
 }
 
-const LINK_TYPE_LABEL: Record<string, string> = { import: 'Import reference', call: 'Call reference', sibling: 'Sibling reference' };
 function showLinkTooltip(event: MouseEvent, d: any) {
   const s = d.status && d.status !== 'unchanged' ? d.status : null;
   const col = s ? STATUS_COLOR[s] : '';
   const badge = s ? ' <span style="color:' + col + ';font-weight:700">[' + s + ']</span>' : '';
   const srcLabel = shortLabel(d.source?.label ?? d.source?.id ?? d.source);
   const tgtLabel = shortLabel(d.target?.label ?? d.target?.id ?? d.target);
-  tooltip.innerHTML = '<strong>' + (LINK_TYPE_LABEL[d._linkType] ?? 'Reference') + '</strong><span class="meta">' +
+  tooltip.innerHTML = '<strong>' + d._linkType + '</strong><span class="meta">' +
     srcLabel + ' &rarr; ' + tgtLabel + badge + '</span>';
   tooltip.classList.add('visible');
   moveTooltip(event);
