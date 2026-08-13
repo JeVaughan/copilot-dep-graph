@@ -65,7 +65,7 @@ function sigLine(src: string, startIndex: number): string {
  * Returns null if tree-sitter unavailable or language unsupported.
  */
 export function parseSource(content: string, fileExt: string): ParsedSource | null {
-  if (!_available || !content) return null;
+  if (!_available || !content || content.includes('\0')) return null;
   const lang = fileExt === '.go'  ? goLang
              : fileExt === '.tsx' ? tsxLang
              : (fileExt === '.ts' || fileExt === '.js' || fileExt === '.jsx') ? tsLang
@@ -74,7 +74,8 @@ export function parseSource(content: string, fileExt: string): ParsedSource | nu
 
   const parser = new Parser();
   parser.setLanguage(lang);
-  const root = parser.parse(content).rootNode;
+  let root: any;
+  try { root = parser.parse(content).rootNode; } catch { return null; }
   return fileExt === '.go' ? parseGo(root, content) : parseTS(root, content);
 }
 

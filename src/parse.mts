@@ -1,7 +1,7 @@
 // parse.mts - builds a file/symbol dependency graph from a git PR diff.
 // Deterministic (git + tree-sitter AST). No AI involved.
 
-import { execSync } from "node:child_process";
+import { execSync, spawnSync } from "node:child_process";
 import { resolve as resolvePath, dirname, basename, extname, join } from "node:path";
 import { initParsers, parseSource, isAvailable, type Symbol as ParsedSymbol } from "./treesitter.mjs";
 import type { GraphNode, GraphEdge } from "./types.mjs";
@@ -41,7 +41,13 @@ export interface ParsePrOptions {
 }
 
 export function parsePr({ repoPath, prRef = "FETCH_HEAD", baseRef = "HEAD", exclude = [] }: ParsePrOptions): { nodes: GraphNode[]; edges: GraphEdge[] } {
-    const git = (cmd: string) => execSync(`git --no-pager ${cmd}`, { cwd: repoPath, encoding: "utf8" });
+    // Use spawnSync with arg array so shell-special chars (^, !, etc.) are never interpreted.
+    const git = (cmd: string) => {
+        const args = cmd.match(/(?:[^\s"]+|"[^"]*")+/g)!.map(a => a.replace(/^"|"$/g, ''));
+        const r = spawnSync("git", ["--no-pager", ...args], { cwd: repoPath, encoding: "utf8", maxBuffer: 32 * 1024 * 1024 });
+        if (r.status !== 0) throw new Error(r.stderr || `git ${args[0]} failed`);
+        return r.stdout;
+    };
     initParsers();
 
     // Auto-detect the true PR base: merge-base of the remote default branch and prRef.
@@ -50,7 +56,11 @@ export function parsePr({ repoPath, prRef = "FETCH_HEAD", baseRef = "HEAD", excl
     let effectiveBase = baseRef;
     try {
         const remoteHead = git("rev-parse --abbrev-ref origin/HEAD").trim(); // e.g. "origin/main"
-        effectiveBase = git(`merge-base ${remoteHead} ${prRef}`).trim();
+        const mergeBase = git(`merge-base ${remoteHead} ${prRef}`).trim();
+        const prSha = git(`rev-parse ${prRef}`).trim();
+        // Only use the merge-base if it's strictly behind prRef.
+        // If they're equal the PR is already on main and the diff would be empty.
+        effectiveBase = (mergeBase !== prSha) ? mergeBase : git(`rev-parse ${baseRef}`).trim();
     } catch {
         // Fall back to caller-supplied baseRef if origin/HEAD isn't configured
         effectiveBase = baseRef;
