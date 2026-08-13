@@ -60,7 +60,7 @@ If you're wiring this into something like a GitHub Copilot CLI canvas extension,
 | Action | Result |
 |--------|--------|
 | Double-click file node | Expand/collapse changed symbols |
-| Hover edge | Shows its type (import / call / sibling), endpoints, and status |
+| Hover edge | Shows its reference type (import / call / sibling), endpoints, and status |
 | Drag node | Re-position (layout re-stabilises) |
 | Scroll | Zoom in/out |
 | Click background + drag | Pan |
