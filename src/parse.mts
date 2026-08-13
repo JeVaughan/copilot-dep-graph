@@ -4,33 +4,9 @@
 import { execSync } from "node:child_process";
 import { resolve as resolvePath, dirname, basename, extname, join } from "node:path";
 import { initParsers, parseSource, isAvailable, type Symbol as ParsedSymbol } from "./treesitter.mjs";
+import type { GraphNode, GraphEdge } from "./types.mjs";
 
-// A node is either a file (no parent) or a symbol (parent = its containing file's id).
-// `type` is "file" for file nodes, or the symbol kind (function/method/class/...) for symbol nodes.
-export interface GraphNode {
-  id: string;
-  label: string;
-  type: string;
-  parent?: string;
-  status?: string;
-}
-
-export interface GraphEdge {
-  src: string;
-  tar: string;
-  type: string;
-  status?: string | null;
-  // Number of underlying relationships this edge represents. Always 1 from parsePr —
-  // aggregate.mts is what collapses several raw edges into one with count > 1.
-  count: number;
-}
-
-export interface GraphData {
-  title?: string;
-  nodes: GraphNode[];
-  edges: GraphEdge[];
-  error?: string;
-}
+export type { GraphNode, GraphEdge, GraphData } from "./types.mjs";
 
 // TypeScript path alias map derived from frontend/tsconfig.json "paths".
 // Maps alias prefix → path segment that appears after shortId stripping.

@@ -53,7 +53,7 @@ await viewer.close();
 
 ### Graph data shape
 
-Nodes and edges are a deliberately minimal, generic graph shape — no visualization-specific fields, so the parser and any viewer stay decoupled:
+Nodes and edges are a deliberately minimal, generic graph shape — no visualization-specific fields, so the parser and any viewer stay decoupled. The canonical definitions live in [src/types.mts](src/types.mts), which has zero imports of its own (no Node built-ins, no treesitter) specifically so it's safe to pull into the browser build without dragging anything else along — `parse.mts`, `aggregate.mts`, and `graph-client.ts` all import from there rather than each declaring their own copy:
 
 ```ts
 interface GraphNode {
@@ -131,6 +131,7 @@ Edge type (import / call / reference / sibling) is not shown as a distinct line 
 dep-graph-core/
 ├── src/
 │   ├── index.mts          # Public API barrel
+│   ├── types.mts          # Shared GraphNode/GraphEdge/GraphData shape — zero imports of its own
 │   ├── parse.mts          # parsePr: git diff + tree-sitter → graph data
 │   ├── parse.test.mts     # node:test suite for parse.mts, runs against the built dist/
 │   ├── treesitter.mts     # AST extraction (TypeScript + Go)

@@ -5,39 +5,12 @@
 // duplicating it.
 
 import { buildLinks } from "./aggregate.mjs";
+import type { GraphNode, GraphData } from "./types.mjs";
 
 declare const d3: any;
 // Substituted server-side (see renderClientJs in viewer.mts) before this
 // script reaches the browser.
 declare const __GRAPH_DATA__: GraphData;
-
-// A node is either a file (no parent) or a symbol (parent = its containing
-// file's id). `type` is "file" for file nodes, or the symbol kind
-// (function/method/class/...) for symbol nodes.
-interface GraphNode {
-  id: string;
-  label: string;
-  type: string;
-  parent?: string;
-  status?: string;
-  [key: string]: any;
-}
-
-interface GraphEdge {
-  src: string;
-  tar: string;
-  type: string;
-  status?: string | null;
-  count: number;
-  [key: string]: any;
-}
-
-interface GraphData {
-  title?: string;
-  error?: string;
-  nodes: GraphNode[];
-  edges: GraphEdge[];
-}
 
 const STATUS_COLOR: Record<string, string> = { added: '#56d364', modified: '#e3b341', removed: '#f85149' };
 const NODE_NEUTRAL = '#8b949e';
@@ -132,7 +105,7 @@ function render() {
 
   for (const n of fileNodes) {
     const pos = posCache.get(n.id);
-    const node = Object.assign({}, n, { _type: 'file', _expanded: expandedNodes.has(n.id) });
+    const node: any = Object.assign({}, n, { _type: 'file', _expanded: expandedNodes.has(n.id) });
     if (pos) { node.x = pos.x; node.y = pos.y; }
     allNodes.push(node); nodeById.set(n.id, node);
   }

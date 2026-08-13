@@ -2,26 +2,8 @@
 // file nodes are currently expanded, compute the visible nodes and the aggregated edges
 // to render. No DOM/d3 dependency, so it runs identically in Node (tests, this file's
 // own dist/aggregate.mjs) and in the browser (graph-client.ts imports the same file).
-//
-// GraphNode/GraphEdge are declared locally (structurally identical to parse.mts's)
-// rather than imported, so this file has zero dependency on parse.mts/treesitter.mts —
-// pulling those in would drag treesitter.mts's `import.meta.url` into the browser
-// compile, which tsconfig.browser.json's settings can't handle.
-export interface GraphNode {
-  id: string;
-  label: string;
-  type: string;
-  parent?: string;
-  status?: string;
-}
 
-export interface GraphEdge {
-  src: string;
-  tar: string;
-  type: string;
-  status?: string | null;
-  count: number;
-}
+import type { GraphNode, GraphEdge } from "./types.mjs";
 
 const TYPE_PRIORITY = ["call", "reference", "import", "sibling"];
 
