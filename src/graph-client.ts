@@ -4,7 +4,7 @@
 // share aggregate.mts's collapsing logic with the Node-side tests, rather than
 // duplicating it.
 
-import { buildLinks } from "./aggregate.mjs";
+import { buildLinks, visibleChildren, nextExpandLevel } from "./aggregate.mjs";
 import type { GraphNode, GraphData } from "./types.mjs";
 
 declare const d3: any;
@@ -42,7 +42,9 @@ function hullPath(pts: number[][], pad: number): string {
 }
 
 let graphData: GraphData = __GRAPH_DATA__;
-let expandedNodes = new Set<string>();
+// Per-file expand level: 0 (collapsed, default/absent) -> 1 (changed symbols only)
+// -> 2 (every symbol, including unchanged). See aggregate.mts's nextExpandLevel.
+let expandLevel = new Map<string, number>();
 let showIsolated = true;
 let simulation: any = null;
 
@@ -51,8 +53,19 @@ let simulation: any = null;
 let nodeMeta = new Map<string, GraphNode>();
 let childrenByParent = new Map<string, GraphNode[]>();
 
-function changedChildren(fileId: string): GraphNode[] {
-  return (childrenByParent.get(fileId) ?? []).filter(s => s.status && s.status !== 'unchanged');
+// changed/unchanged/total counts for a file's symbol children, used to decide the
+// next expand level and to show a "+N hidden" badge on the node.
+function symbolCounts(fileId: string): { changed: number; unchanged: number; total: number } {
+  const children = childrenByParent.get(fileId) ?? [];
+  const changed = visibleChildren(children, 1).length;
+  return { changed, unchanged: children.length - changed, total: children.length };
+}
+
+// How many of a file's symbols aren't currently shown, at its current expand level.
+function hiddenCount(fileId: string): number {
+  const { total } = symbolCounts(fileId);
+  const level = expandLevel.get(fileId) ?? 0;
+  return total - visibleChildren(childrenByParent.get(fileId) ?? [], level).length;
 }
 
 const svg = d3.select('#svg');
@@ -114,14 +127,13 @@ function render() {
 
   for (const n of fileNodes) {
     const pos = posCache.get(n.id);
-    const node = Object.assign({}, n, { _type: 'file', _expanded: expandedNodes.has(n.id) });
+    const node = Object.assign({}, n, { _type: 'file', _expanded: (expandLevel.get(n.id) ?? 0) > 0 });
     if (pos) { node.x = pos.x; node.y = pos.y; }
     allNodes.push(node); nodeById.set(n.id, node);
   }
   for (const n of fileNodes) {
-    // Only show symbols that actually changed (signature or body diff)
-    const cs = changedChildren(n.id);
-    if (expandedNodes.has(n.id) && cs.length) {
+    const cs = visibleChildren(childrenByParent.get(n.id) ?? [], expandLevel.get(n.id) ?? 0);
+    if (cs.length) {
       const parent = nodeById.get(n.id);
       const group: any[] = [];
       for (const sym of cs) {
@@ -141,7 +153,7 @@ function render() {
   // buildLinks (aggregate.mts) resolves each edge against which files are expanded
   // and which symbols are actually visible, collapsing everything that lands on the
   // same (src, tar) pair — regardless of original edge type — into one summary edge.
-  for (const e of buildLinks(rawNodes, rawEdges, expandedNodes)) {
+  for (const e of buildLinks(rawNodes, rawEdges, expandLevel)) {
     allLinks.push({ source: e.src, target: e.tar, type: e.type, status: e.status, count: e.count });
   }
 
@@ -289,7 +301,12 @@ function render() {
     .selectAll('text').data(allNodes).join('text')
     .attr('class', (d: any) => 'label ' + (d._type === 'symbol' ? 'symbol' : 'file'))
     .attr('x', 0).attr('y', -14).attr('text-anchor', 'middle')
-    .text((d: any) => d.label ?? shortLabel(d.id));
+    .text((d: any) => {
+      const label = d.label ?? shortLabel(d.id);
+      if (d._type !== 'file') return label;
+      const hidden = hiddenCount(d.id);
+      return hidden > 0 ? label + ' (+' + hidden + ')' : label;
+    });
 
   simulation.on('tick', () => {
     linkSel.attr('x1', (d: any) => d.source.x).attr('y1', (d: any) => d.source.y)
@@ -310,24 +327,37 @@ function symShape(d: any): string {
   return 'circle'; // property, const, field, unknown
 }
 
-// A file node is expandable if it has changed symbol children (signature or body diff).
+// A file node is expandable if it has any symbol children at all (changed or not).
 function expandable(d: any): boolean {
-  return d._type === 'file' && changedChildren(d.id).length > 0;
+  return d._type === 'file' && symbolCounts(d.id).total > 0;
 }
 
 function handleDblClick(d: any) {
   if (!expandable(d)) return;
-  if (expandedNodes.has(d.id)) expandedNodes.delete(d.id); else expandedNodes.add(d.id);
+  const { changed, unchanged } = symbolCounts(d.id);
+  const next = nextExpandLevel(expandLevel.get(d.id) ?? 0, changed, unchanged);
+  if (next === 0) expandLevel.delete(d.id); else expandLevel.set(d.id, next);
   render();
 }
 
 const tooltip = document.getElementById('tooltip')!;
+// What double-clicking this file would do next, or '' if it's not expandable at all.
+function expandHint(fileId: string): string {
+  const { changed, unchanged } = symbolCounts(fileId);
+  const current = expandLevel.get(fileId) ?? 0;
+  const next = nextExpandLevel(current, changed, unchanged);
+  if (next === current) return '';
+  if (next === 0) return 'double-click to collapse';
+  if (next === 1) return 'double-click to expand (' + changed + ' changed)';
+  return 'double-click to show ' + unchanged + ' unchanged';
+}
+
 function showTooltip(event: MouseEvent, d: any) {
   const s = nodeStatus(d);
   const col = s ? STATUS_COLOR[s] : '';
   const badge = s ? ' <span style="color:' + col + ';font-weight:700">[' + s + ']</span>' : '';
-  const changed = d._type === 'file' ? changedChildren(d.id) : [];
-  const hint = changed.length ? '<br>double-click to ' + (expandedNodes.has(d.id) ? 'collapse' : 'expand (' + changed.length + ' changed)') : '';
+  const hintText = d._type === 'file' ? expandHint(d.id) : '';
+  const hint = hintText ? '<br>' + hintText : '';
   tooltip.innerHTML = '<strong>' + (d.label ?? shortLabel(d.id)) + '</strong><span class="meta">' +
     (d._type === 'symbol' ? (d.type || 'symbol') : 'file') + badge + hint + '</span>';
   tooltip.classList.add('visible');
@@ -363,7 +393,7 @@ function fitView() {
   svg.transition().duration(500).call(zoom.transform, d3.zoomIdentity.translate(tx, ty).scale(scale));
 }
 document.getElementById('btn-fit')!.addEventListener('click', fitView);
-document.getElementById('btn-reset-expand')!.addEventListener('click', () => { expandedNodes.clear(); render(); });
+document.getElementById('btn-reset-expand')!.addEventListener('click', () => { expandLevel.clear(); render(); });
 
 const evtSource = new EventSource('/events');
 evtSource.onmessage = (e: MessageEvent) => {

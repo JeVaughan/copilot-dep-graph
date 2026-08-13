@@ -5,6 +5,10 @@
 
 import type { GraphNode, GraphEdge } from "./types.mjs";
 
+// A file's expand level: 0 = collapsed, 1 = changed symbols only, 2 = all symbols
+// (changed + unchanged). Absent from the map is equivalent to 0.
+export type ExpandLevels = Map<string, number>;
+
 const TYPE_PRIORITY = ["call", "reference", "import", "sibling"];
 
 function primaryType(types: Set<string>): string {
@@ -22,20 +26,44 @@ function aggregateStatus(statuses: Set<string>): string | null {
   return "modified";
 }
 
-// Which symbol nodes are actually visible: every file node, plus the changed (non-
-// "unchanged") symbol children of any expanded file.
-export function computeVisibleNodeIds(nodes: GraphNode[], expandedNodes: Set<string>): Set<string> {
-  const childrenByParent = new Map<string, GraphNode[]>();
+// Which of a file's symbol children are visible at a given expand level: none at 0,
+// only changed (non-"unchanged") ones at 1, everything at 2+.
+export function visibleChildren(children: GraphNode[], level: number): GraphNode[] {
+  if (level <= 0) return [];
+  if (level >= 2) return children;
+  return children.filter(c => c.status && c.status !== "unchanged");
+}
+
+// Cycles a file's expand level: 0 (collapsed) -> 1 (changed only) -> 2 (all) -> 0,
+// skipping any level that wouldn't actually add anything new to what's already shown.
+// E.g. an all-added file has no unchanged symbols, so 1 goes straight back to 0; a file
+// with no changed symbols (only unchanged) skips 1 entirely, going straight from 0 to 2.
+export function nextExpandLevel(current: number, changedCount: number, unchangedCount: number): number {
+  if (changedCount === 0 && unchangedCount === 0) return current;
+  if (current === 0) return changedCount > 0 ? 1 : 2;
+  if (current === 1) return unchangedCount > 0 ? 2 : 0;
+  return 0;
+}
+
+function groupByParent(nodes: GraphNode[]): Map<string, GraphNode[]> {
+  const byParent = new Map<string, GraphNode[]>();
   for (const n of nodes) {
     if (!n.parent) continue;
-    if (!childrenByParent.has(n.parent)) childrenByParent.set(n.parent, []);
-    childrenByParent.get(n.parent)!.push(n);
+    if (!byParent.has(n.parent)) byParent.set(n.parent, []);
+    byParent.get(n.parent)!.push(n);
   }
+  return byParent;
+}
+
+// Which node ids are actually visible: every file node, plus each expanded file's
+// visibleChildren() at its own level.
+export function computeVisibleNodeIds(nodes: GraphNode[], expandLevels: ExpandLevels): Set<string> {
+  const childrenByParent = groupByParent(nodes);
   const visible = new Set<string>();
   for (const n of nodes) if (!n.parent) visible.add(n.id);
   for (const [parentId, children] of childrenByParent) {
-    if (!expandedNodes.has(parentId)) continue;
-    for (const c of children) if (c.status && c.status !== "unchanged") visible.add(c.id);
+    const level = expandLevels.get(parentId) ?? 0;
+    for (const c of visibleChildren(children, level)) visible.add(c.id);
   }
   return visible;
 }
@@ -54,9 +82,9 @@ interface Group { src: string; tar: string; count: number; types: Set<string>; s
 // resolved (src, tar) pair — NOT on edge type — so a call edge and a reference
 // edge that both collapse onto the same pair of visible nodes merge into one line
 // instead of rendering as two separate, differently-coloured edges.
-export function buildLinks(nodes: GraphNode[], edges: GraphEdge[], expandedNodes: Set<string>): GraphEdge[] {
+export function buildLinks(nodes: GraphNode[], edges: GraphEdge[], expandLevels: ExpandLevels): GraphEdge[] {
   const nodeMeta = new Map(nodes.map(n => [n.id, n]));
-  const visible = computeVisibleNodeIds(nodes, expandedNodes);
+  const visible = computeVisibleNodeIds(nodes, expandLevels);
   const groups = new Map<string, Group>();
 
   function add(src: string, tar: string, type: string, status: string | null | undefined) {
@@ -75,7 +103,7 @@ export function buildLinks(nodes: GraphNode[], edges: GraphEdge[], expandedNodes
   // to itself — so this applies uniformly with no need to branch on edge type.
   function resolve(id: string): string {
     const file = fileOf(nodeMeta, id);
-    return (expandedNodes.has(file) && visible.has(id)) ? id : file;
+    return ((expandLevels.get(file) ?? 0) > 0 && visible.has(id)) ? id : file;
   }
 
   for (const e of edges) {
