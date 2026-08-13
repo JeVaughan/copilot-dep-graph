@@ -68,38 +68,21 @@ export function buildLinks(nodes: GraphNode[], edges: GraphEdge[], expandedNodes
     g.statuses.add(status && status !== "unchanged" ? status : "unchanged");
   }
 
+  // Resolve any edge endpoint (file or symbol id) against the current expand state:
+  // keep it as-is if it's a currently-visible symbol under an expanded file, else
+  // collapse to its containing file. A no-op for endpoints that are already file ids
+  // (import/sibling edges, and a reference edge's source) — a file always resolves
+  // to itself — so this applies uniformly with no need to branch on edge type.
+  function resolve(id: string): string {
+    const file = fileOf(nodeMeta, id);
+    return (expandedNodes.has(file) && visible.has(id)) ? id : file;
+  }
+
   for (const e of edges) {
-    if (e.type === "import" || e.type === "sibling") {
-      if (visible.has(e.src) && visible.has(e.tar)) add(e.src, e.tar, e.type, e.status);
-      continue;
-    }
-
-    if (e.type === "call") {
-      const srcFile = fileOf(nodeMeta, e.src), tarFile = fileOf(nodeMeta, e.tar);
-      // Resolve each side independently: prefer the symbol node if its file is
-      // expanded and that symbol is actually visible, else collapse to the file.
-      const srcSym = expandedNodes.has(srcFile) && visible.has(e.src) ? e.src : null;
-      const tarSym = expandedNodes.has(tarFile) && visible.has(e.tar) ? e.tar : null;
-      const src = srcSym ?? srcFile;
-      const tar = tarSym ?? tarFile;
-      if (src === tar) continue;
-      if (!visible.has(src) || !visible.has(tar)) continue;
-      // Use the calling symbol's own status as-is — no falling back to the file's
-      // status. aggregateStatus() already ensures a real status among several
-      // merged edges isn't hidden by a genuinely-unchanged one.
-      add(src, tar, "call", e.status);
-      continue;
-    }
-
-    if (e.type === "reference") {
-      // Source is always a file already; only the target might be a symbol.
-      const tarFile = fileOf(nodeMeta, e.tar);
-      const tarSym = expandedNodes.has(tarFile) && visible.has(e.tar) ? e.tar : null;
-      const tar = tarSym ?? tarFile;
-      if (e.src === tar) continue;
-      if (!visible.has(e.src) || !visible.has(tar)) continue;
-      add(e.src, tar, "reference", e.status);
-    }
+    const src = resolve(e.src), tar = resolve(e.tar);
+    if (src === tar) continue;
+    if (!visible.has(src) || !visible.has(tar)) continue;
+    add(src, tar, e.type, e.status);
   }
 
   const result: GraphEdge[] = [];
