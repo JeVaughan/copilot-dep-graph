@@ -24,9 +24,12 @@ export class Baz {
   const result = parseSource(src, ".ts")!;
   const names = result.symbols.map(s => s.name).sort();
   assert.deepEqual(names, ["Baz", "bar", "method"].sort());
+  assert.equal(result.symbols.find(s => s.name === "method")?.parent, "Baz");
 
+  // "method" lives inside class Baz, so its callsByFunction key is qualified;
+  // "bar" is a top-level function, so it stays bare.
   assert.deepEqual([...result.callsByFunction.get("bar")!], ["helper"]);
-  assert.deepEqual([...result.callsByFunction.get("method")!], ["bar"]);
+  assert.deepEqual([...result.callsByFunction.get("Baz.method")!], ["bar"]);
 
   assert.deepEqual([...result.imports].sort(), ["./types", "./util"]);
   assert.deepEqual([...result.namedImports!.get("./types")!].sort(), ["A", "B"]);
@@ -40,7 +43,7 @@ export class Widget {
 }
 `;
   const result = parseSource(src, ".ts")!;
-  assert.ok(result.callsByFunction.get("count")?.has("computed"));
+  assert.ok(result.callsByFunction.get("Widget.count")?.has("computed"));
 });
 
 test("treats `new X()` as a callee, same as a regular call", () => {
@@ -50,7 +53,25 @@ export class Widget {
 }
 `;
   const result = parseSource(src, ".ts")!;
-  assert.ok(result.callsByFunction.get("service")?.has("GreetingService"));
+  assert.ok(result.callsByFunction.get("Widget.service")?.has("GreetingService"));
+});
+
+test("qualifies callsByFunction keys by enclosing class, so same-named methods on different classes don't merge callees", () => {
+  const src = `
+export class A {
+  run() { fromA(); }
+}
+export class B {
+  run() { fromB(); }
+}
+`;
+  const result = parseSource(src, ".ts")!;
+  assert.deepEqual([...result.callsByFunction.get("A.run")!], ["fromA"]);
+  assert.deepEqual([...result.callsByFunction.get("B.run")!], ["fromB"]);
+  assert.equal(result.callsByFunction.get("run"), undefined, "bare 'run' should not exist once both methods are qualified");
+
+  const runs = result.symbols.filter(s => s.name === "run");
+  assert.deepEqual(runs.map(s => s.parent).sort(), ["A", "B"]);
 });
 
 test("parses Go functions, methods and exported types", () => {

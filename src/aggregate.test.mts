@@ -139,6 +139,60 @@ test("buildLinks keeps symbol-level edges distinct once their file is expanded",
   assert.deepEqual(pairs, ["b.ts:::x->a.ts:::add", "b.ts:::y->a.ts:::sub"]);
 });
 
+test("computeVisibleNodeIds: a grandchild is visible only when every ancestor is itself expanded enough to reveal it", () => {
+  const nodes = [
+    node("a.ts", "file", undefined, "modified"),
+    node("a.ts:::Widget", "class", "a.ts", "modified"),
+    node("a.ts:::Widget:::run", "method", "a.ts:::Widget", "added"),
+    node("a.ts:::Widget:::old", "method", "a.ts:::Widget", "unchanged"),
+  ];
+
+  assert.deepEqual([...computeVisibleNodeIds(nodes, new Map())].sort(), ["a.ts"]);
+
+  // File expanded, but the class itself isn't expanded: Widget shows, its methods don't.
+  const fileOnly = computeVisibleNodeIds(nodes, new Map([["a.ts", 1]]));
+  assert.deepEqual([...fileOnly].sort(), ["a.ts", "a.ts:::Widget"]);
+
+  // File and class both expanded to "changed only": the changed method shows, the
+  // unchanged one doesn't.
+  const both1 = computeVisibleNodeIds(nodes, new Map([["a.ts", 1], ["a.ts:::Widget", 1]]));
+  assert.deepEqual([...both1].sort(), ["a.ts", "a.ts:::Widget", "a.ts:::Widget:::run"]);
+
+  // Class expanded to "all": both methods show.
+  const both2 = computeVisibleNodeIds(nodes, new Map([["a.ts", 1], ["a.ts:::Widget", 2]]));
+  assert.deepEqual([...both2].sort(), ["a.ts", "a.ts:::Widget", "a.ts:::Widget:::old", "a.ts:::Widget:::run"]);
+});
+
+test("buildLinks: an edge to a hidden grandchild collapses to the nearest VISIBLE ancestor, not straight to the file", () => {
+  const nodes = [
+    node("a.ts", "file", undefined, "modified"),
+    node("a.ts:::Widget", "class", "a.ts", "modified"),
+    node("a.ts:::Widget:::run", "method", "a.ts:::Widget", "added"),
+    node("b.ts", "file", undefined, "added"),
+    node("b.ts:::caller", "function", "b.ts", "added"),
+  ];
+  const edges = [
+    { src: "b.ts:::caller", tar: "a.ts:::Widget:::run", type: "call", status: "added", count: 1 },
+  ];
+
+  // a.ts expanded (Widget visible) but Widget itself collapsed (run hidden): the edge
+  // should land on Widget, not skip past it straight to a.ts.
+  const links = buildLinks(nodes, edges, new Map([["a.ts", 1], ["b.ts", 1]]));
+  assert.equal(links.length, 1);
+  assert.equal(links[0].src, "b.ts:::caller");
+  assert.equal(links[0].tar, "a.ts:::Widget");
+
+  // Neither a.ts nor Widget expanded: collapses all the way to the file.
+  const collapsed = buildLinks(nodes, edges, new Map([["b.ts", 1]]));
+  assert.equal(collapsed.length, 1);
+  assert.equal(collapsed[0].tar, "a.ts");
+
+  // Widget expanded too: resolves all the way to the method itself.
+  const full = buildLinks(nodes, edges, new Map([["a.ts", 1], ["a.ts:::Widget", 1], ["b.ts", 1]]));
+  assert.equal(full.length, 1);
+  assert.equal(full[0].tar, "a.ts:::Widget:::run");
+});
+
 test("buildLinks: at level 1, an edge to an unchanged symbol falls back to the file (not visible yet)", () => {
   const nodes = [
     node("a.ts", "file", undefined, "modified"),

@@ -158,6 +158,7 @@ dep-graph-core/
 │   ├── aggregate.mts      # Pure edge-collapsing logic, shared by graph-client.ts and its tests
 │   ├── aggregate.test.mts
 │   └── graph-client.ts    # Browser-side D3 force graph renderer (real ES module)
+├── samples/               # Checked-in base/pr fixtures for the dev harness (see below)
 ├── dev/serve.mts         # Manual dev harness (not published)
 ├── graph.html            # D3 force graph UI shell (loads /graph-client.js as a module)
 ├── d3.min.js             # Bundled D3 v7 (no CDN)
@@ -178,13 +179,16 @@ npm test         # runs the node:test suite against the built dist/
 
 ### Trying it out in a browser
 
-`npm run dev` starts the D3 viewer with sample data and prints a URL to open. Pass `--repo` to parse a real PR diff instead. It binds a stable port (4500) by default, so a port-forward set up once (e.g. in a remote/devcontainer session) keeps working across restarts — pass `--port` to use a different one:
+`npm run dev` starts the D3 viewer with sample data and prints a URL to open. Pass `--repo` to parse a real PR diff instead, or `--sample <name>` to run against a checked-in fixture under [samples/](samples/) (e.g. `class-methods`, which exercises added/modified/removed files and nested class methods). It binds a stable port (4500) by default, so a port-forward set up once (e.g. in a remote/devcontainer session) keeps working across restarts — pass `--port` to use a different one:
 
 ```bash
 npm run dev
 npm run dev -- --repo /path/to/repo --pr HEAD --base main
+npm run dev -- --sample class-methods
 npm run dev -- --port 4501
 ```
+
+A sample is a plain `base/`/`pr/` pair of file snapshots (no nested `.git` — embedding a real git repo inside this one is a recognized anti-pattern). `dev/serve.mts` materializes it into a scratch git repo with two real commits on the fly and diffs it exactly like any other `--repo`.
 
 ## License
 

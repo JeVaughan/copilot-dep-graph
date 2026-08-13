@@ -3,10 +3,56 @@
 
 import { spawnSync } from "node:child_process";
 import { resolve as resolvePath, dirname, basename, extname, join } from "node:path";
-import { initParsers, parseSource, isAvailable, type Symbol as ParsedSymbol } from "./treesitter.mjs";
+import { initParsers, parseSource, isAvailable, qualifiedName, type Symbol as ParsedSymbol } from "./treesitter.mjs";
 import type { GraphNode, GraphEdge } from "./types.mjs";
 
 export type { GraphNode, GraphEdge, GraphData } from "./types.mjs";
+
+export interface DiffedSymbol extends ParsedSymbol { status: string; }
+
+// Matches PR symbols against base symbols by qualifiedName() rather than bare name,
+// so e.g. two classes that both have a `run` method diff independently instead of
+// cross-matching each other's body.
+export function diffSymbols(prSyms: ParsedSymbol[], baseSyms: ParsedSymbol[]): DiffedSymbol[] {
+  const baseMap = new Map(baseSyms.map(s => [qualifiedName(s), s]));
+  const prMap   = new Map(prSyms.map(s => [qualifiedName(s), s]));
+  const diffed: DiffedSymbol[] = [];
+
+  for (const sym of prSyms) {
+    const base = baseMap.get(qualifiedName(sym));
+    const status = !base                                                                 ? "added"
+                  : (base.body ?? base.signature) !== (sym.body ?? sym.signature)         ? "modified"
+                  : "unchanged";
+    diffed.push({ ...sym, status });
+  }
+  for (const sym of baseSyms) {
+    if (!prMap.has(qualifiedName(sym))) diffed.push({ ...sym, status: "removed" });
+  }
+  return diffed;
+}
+
+// Converts a symbol's qualifiedName() (its source-level identity, dot-joined through
+// enclosing symbols) into the graph node id it gets inside a given file (colon-joined,
+// chained through the *graph* ids of the same ancestors). The two id schemes are kept
+// separate on purpose — see the comment on Symbol.parent in treesitter.mts — and this
+// is the one place that converts between them, so node-building and call-edge
+// resolution can never derive different ids for the same symbol.
+export function graphIdForQualifiedName(fileId: string, qualified: string): string {
+  return `${fileId}:::${qualified.split(".").join(":::")}`;
+}
+
+// Builds a file's node subtree: the file node itself, plus one node per symbol. A
+// symbol with no `parent` sits directly under the file, exactly as before; a symbol
+// with a `parent` (e.g. a class method) nests under that container's own node instead.
+export function buildFileNodes(fileId: string, fileStatus: string, symbols: DiffedSymbol[]): GraphNode[] {
+  const nodes: GraphNode[] = [{ id: fileId, label: fileId.split('/').pop()!, type: "file", status: fileStatus }];
+  for (const sym of symbols) {
+    const id = graphIdForQualifiedName(fileId, qualifiedName(sym));
+    const parent = sym.parent ? graphIdForQualifiedName(fileId, sym.parent) : fileId;
+    nodes.push({ id, label: sym.name, type: sym.kind, parent, status: sym.status });
+  }
+  return nodes;
+}
 
 // TypeScript path alias map derived from frontend/tsconfig.json "paths".
 // Maps alias prefix → path segment that appears after shortId stripping.
@@ -119,45 +165,24 @@ export function parsePr({ repoPath, prRef = "FETCH_HEAD", baseRef = "HEAD", excl
         if (bp) parsedBase.set(filePath, bp);
     }
 
-    // 4. Build nodes: one per file, plus one flat node per symbol (parent = its file's id).
+    // 4. Build nodes: one per file, plus one node per symbol (nested under its
+    // enclosing symbol when it has one, e.g. a class method — see buildFileNodes).
     const nodes: GraphNode[] = [];
     // filePath → diffed symbols (with correct per-symbol status), kept for step 6's edge statuses.
-    const fileSymbols = new Map<string, (ParsedSymbol & { status: string })[]>();
+    const fileSymbols = new Map<string, DiffedSymbol[]>();
 
     for (const [filePath, status] of fileStatus) {
         const pp = parsedPr.get(filePath);
         const bp = parsedBase.get(filePath);
         const fileId = shortId(filePath);
 
-        let symbols: (ParsedSymbol & { status: string })[];
-        if (pp || bp) {
-            const prSyms   = pp?.symbols ?? [];
-            const baseSyms = bp?.symbols ?? [];
-            const baseMap  = new Map(baseSyms.map(s => [s.name, s]));
-            const prMap    = new Map(prSyms.map(s => [s.name, s]));
-            const diffed: (ParsedSymbol & { status: string })[] = [];
-
-            for (const sym of prSyms) {
-                const base = baseMap.get(sym.name);
-                const symStatus = !base                               ? "added"
-                                : (base.body ?? base.signature) !== (sym.body ?? sym.signature) ? "modified"
-                                : "unchanged";
-                diffed.push({ ...sym, status: symStatus });
-            }
-            for (const sym of baseSyms) {
-                if (!prMap.has(sym.name)) diffed.push({ ...sym, status: "removed" });
-            }
-            symbols = diffed;
-        } else {
+        const symbols: DiffedSymbol[] = (pp || bp)
+            ? diffSymbols(pp?.symbols ?? [], bp?.symbols ?? [])
             // Regex fallback
-            symbols = extractSymbolsRegex(prContent.get(filePath) || baseContent.get(filePath) || "").map(s => ({ ...s, status: "unchanged" }));
-        }
+            : extractSymbolsRegex(prContent.get(filePath) || baseContent.get(filePath) || "").map(s => ({ ...s, status: "unchanged" }));
 
         fileSymbols.set(filePath, symbols);
-        nodes.push({ id: fileId, label: fileId.split('/').pop()!, type: "file", status });
-        for (const sym of symbols) {
-            nodes.push({ id: `${fileId}:::${sym.name}`, label: sym.name, type: sym.kind, parent: fileId, status: sym.status });
-        }
+        nodes.push(...buildFileNodes(fileId, status, symbols));
     }
 
     // 5. Build edges
@@ -275,18 +300,26 @@ export function parsePr({ repoPath, prRef = "FETCH_HEAD", baseRef = "HEAD", excl
             const pp = parsedPr.get(srcFile);
             if (!pp) continue;
             const srcFileId = shortId(srcFile);
-            // Per-file symbol status lookup so call edges carry the calling symbol's own diff status
-            const symStatus = new Map((fileSymbols.get(srcFile) ?? []).map(s => [s.name, s.status ?? null]));
+            // Per-file symbol status lookup so call edges carry the calling symbol's own diff status.
+            // Keyed by qualifiedName() to match callsByFunction's keys (see treesitter.mts).
+            const symStatus = new Map((fileSymbols.get(srcFile) ?? []).map(s => [qualifiedName(s), s.status ?? null]));
             for (const [fnName, callees] of pp.callsByFunction) {
-                const srcSymId = `${srcFileId}:::${fnName}`;
+                const srcSymId = graphIdForQualifiedName(srcFileId, fnName);
                 const edgeStatus = symStatus.get(fnName) ?? null;
                 for (const callee of callees) {
                     for (const tgtFile of (symbolIndex.get(callee) ?? [])) {
                         const tgtFileId = shortId(tgtFile);
-                        const key = `${srcSymId}->${tgtFileId}:::${callee}:call`;
-                        if (seenLinks.has(key)) continue;
-                        seenLinks.add(key);
-                        edges.push({ src: srcSymId, tar: `${tgtFileId}:::${callee}`, type: 'call', status: edgeStatus, count: 1 });
+                        // A bare callee name (e.g. from `this.base()`) doesn't say which container
+                        // it belongs to, so resolve it against the target file's actual symbols —
+                        // fanning out to every match if more than one container shares that name,
+                        // rather than guessing a single (possibly nested, possibly wrong) id.
+                        for (const tgtSym of (fileSymbols.get(tgtFile) ?? []).filter(s => s.name === callee)) {
+                            const tgtId = graphIdForQualifiedName(tgtFileId, qualifiedName(tgtSym));
+                            const key = `${srcSymId}->${tgtId}:call`;
+                            if (seenLinks.has(key)) continue;
+                            seenLinks.add(key);
+                            edges.push({ src: srcSymId, tar: tgtId, type: 'call', status: edgeStatus, count: 1 });
+                        }
                     }
                 }
             }

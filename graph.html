@@ -23,8 +23,8 @@
        Status colour/opacity/dasharray is set in JS (graph-client.ts), not here, so there's
        one source of truth shared with node fills, arrow markers, and the legend below. */
     .link { stroke-width: 1.2; cursor: default; }
-    .node circle { cursor: default; }
-    .node.expandable circle { cursor: pointer; }
+    .node circle, .symbol-node circle, .symbol-node rect, .symbol-node polygon { cursor: default; }
+    .expandable circle, .expandable rect, .expandable polygon { cursor: pointer; }
     .label { pointer-events: none; dominant-baseline: central; }
     .label.file { fill: #e6edf3; font-size: 11px; font-weight: 500; }
     .label.symbol { fill: #adbac7; font-size: 10px; }

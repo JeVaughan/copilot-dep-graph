@@ -26,9 +26,24 @@ export function isAvailable(): boolean { return _available; }
 export interface Symbol {
   name: string;
   kind: string;
+  // The enclosing symbol's own (bare, top-level) name — e.g. a method's containing
+  // class — or absent for a top-level symbol. This is the *source*-level identity:
+  // it says how a symbol nests in the language, and is what diffing/call-resolution
+  // match on (see qualifiedName below). It's independent of a node's *graph* id
+  // (built in parse.mts by chaining ids with ":::"), which is a rendering-layer
+  // concern — the two happen to correlate 1:1 but are computed separately.
+  parent?: string;
   signature?: string;
   body?: string;
   status?: string;
+}
+
+// A symbol's fully-qualified source-level name (e.g. "Widget.run" for a method `run`
+// on class `Widget`) — the identity used to match a symbol across parse passes
+// (diffing) or to key its calls, so that same-named members of different containers
+// never cross-match. Bare name when there's no enclosing symbol.
+export function qualifiedName(sym: Pick<Symbol, "name" | "parent">): string {
+  return sym.parent ? `${sym.parent}.${sym.name}` : sym.name;
 }
 
 export interface ParsedSource {
@@ -103,6 +118,18 @@ function mergeCalls(map: Map<string, Set<string>>, fnName: string, callees: Set<
   for (const c of callees) map.get(fnName)!.add(c);
 }
 
+// Walks up from a method/field node to find its containing class's name, so callers
+// can key callsByFunction by qualifiedName() and avoid merging same-named methods
+// from different classes into one entry.
+function enclosingClassName(node: any): string | undefined {
+  for (let n = node.parent; n; n = n.parent) {
+    if (n.type === 'class_declaration' || n.type === 'abstract_class_declaration') {
+      return n.childForFieldName('name')?.text;
+    }
+  }
+  return undefined;
+}
+
 // ── TypeScript / JavaScript ───────────────────────────────────────────────────
 
 function parseTS(root: any, content: string): ParsedSource {
@@ -141,7 +168,7 @@ function parseTS(root: any, content: string): ParsedSource {
     const body = fn.childForFieldName('body');
     if (name && body) {
       const callees = collectCallees(body);
-      if (callees.size) mergeCalls(callsByFunction, name, callees);
+      if (callees.size) mergeCalls(callsByFunction, qualifiedName({ name, parent: enclosingClassName(fn) }), callees);
     }
   }
 
@@ -162,7 +189,7 @@ function parseTS(root: any, content: string): ParsedSource {
     const name = field.childForFieldName('name')?.text;
     if (!name) continue;
     const callees = collectCallees(field);
-    if (callees.size) mergeCalls(callsByFunction, name, callees);
+    if (callees.size) mergeCalls(callsByFunction, qualifiedName({ name, parent: enclosingClassName(field) }), callees);
   }
 
   return { symbols, callsByFunction, imports, namedImports };
@@ -189,7 +216,7 @@ function extractTSDecl(decl: any, content: string, symbols: Symbol[]) {
           } else if (member.type === 'public_field_definition' || member.type === 'field_definition') {
             mname = member.childForFieldName('name')?.text; kind = 'property';
           }
-          if (mname) symbols.push({ name: mname, kind: kind!, signature: sigLine(content, member.startIndex), body: content.slice(member.startIndex, member.endIndex) });
+          if (mname) symbols.push({ name: mname, kind: kind!, parent: cname, signature: sigLine(content, member.startIndex), body: content.slice(member.startIndex, member.endIndex) });
         }
       }
       break;

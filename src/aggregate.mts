@@ -55,25 +55,42 @@ function groupByParent(nodes: GraphNode[]): Map<string, GraphNode[]> {
   return byParent;
 }
 
-// Which node ids are actually visible: every file node, plus each expanded file's
-// visibleChildren() at its own level.
+// Which node ids are actually visible: every root node (no parent — a file, today),
+// plus — recursively — each visible container's visibleChildren() at its own expand
+// level. A node several levels deep (e.g. a method on a class) is visible only when
+// every ancestor between it and the root is itself visible AND expanded enough to
+// reveal it; a container that's hidden or collapsed hides its whole subtree.
 export function computeVisibleNodeIds(nodes: GraphNode[], expandLevels: ExpandLevels): Set<string> {
   const childrenByParent = groupByParent(nodes);
   const visible = new Set<string>();
-  for (const n of nodes) if (!n.parent) visible.add(n.id);
-  for (const [parentId, children] of childrenByParent) {
-    const level = expandLevels.get(parentId) ?? 0;
-    for (const c of visibleChildren(children, level)) visible.add(c.id);
+  const queue: GraphNode[] = nodes.filter(n => !n.parent);
+  for (const n of queue) visible.add(n.id);
+  while (queue.length) {
+    const parent = queue.shift()!;
+    const level = expandLevels.get(parent.id) ?? 0;
+    for (const c of visibleChildren(childrenByParent.get(parent.id) ?? [], level)) {
+      visible.add(c.id);
+      queue.push(c);
+    }
   }
   return visible;
 }
 
-// Resolve any node id (file or symbol) to its containing file's id.
-function fileOf(nodeMeta: Map<string, GraphNode>, id: string): string {
-  const n = nodeMeta.get(id);
-  if (n) return n.parent ?? id;
-  const i = id.indexOf(":::");
-  return i === -1 ? id : id.slice(0, i);
+// Resolve an edge endpoint to whatever's actually shown for it: itself if visible,
+// else the nearest visible ancestor (walking up .parent one hop at a time) — a
+// collapsed grandchild's edge lands on its nearest expanded container, not straight
+// on the root. Always terminates: computeVisibleNodeIds marks every root visible, so
+// the walk never runs past one. Falls back to a bare file-id prefix for an id with no
+// nodeMeta entry at all (defensive — real parsePr output always has one).
+function resolveToVisible(nodeMeta: Map<string, GraphNode>, visible: Set<string>, id: string): string {
+  let cur = id;
+  while (!visible.has(cur)) {
+    const n = nodeMeta.get(cur);
+    if (n?.parent) { cur = n.parent; continue; }
+    const i = cur.indexOf(":::");
+    return i === -1 ? cur : cur.slice(0, i);
+  }
+  return cur;
 }
 
 interface Group { src: string; tar: string; count: number; types: Set<string>; statuses: Set<string>; }
@@ -96,18 +113,9 @@ export function buildLinks(nodes: GraphNode[], edges: GraphEdge[], expandLevels:
     g.statuses.add(status ?? "unchanged");
   }
 
-  // Resolve any edge endpoint (file or symbol id) against the current expand state:
-  // keep it as-is if it's a currently-visible symbol under an expanded file, else
-  // collapse to its containing file. A no-op for endpoints that are already file ids
-  // (import/sibling edges, and a reference edge's source) — a file always resolves
-  // to itself — so this applies uniformly with no need to branch on edge type.
-  function resolve(id: string): string {
-    const file = fileOf(nodeMeta, id);
-    return ((expandLevels.get(file) ?? 0) > 0 && visible.has(id)) ? id : file;
-  }
-
   for (const e of edges) {
-    const src = resolve(e.src), tar = resolve(e.tar);
+    const src = resolveToVisible(nodeMeta, visible, e.src);
+    const tar = resolveToVisible(nodeMeta, visible, e.tar);
     if (src === tar) continue;
     if (!visible.has(src) || !visible.has(tar)) continue;
     add(src, tar, e.type, e.status);

@@ -42,8 +42,9 @@ function hullPath(pts: number[][], pad: number): string {
 }
 
 let graphData: GraphData = __GRAPH_DATA__;
-// Per-file expand level: 0 (collapsed, default/absent) -> 1 (changed symbols only)
-// -> 2 (every symbol, including unchanged). See aggregate.mts's nextExpandLevel.
+// Per-container expand level: 0 (collapsed, default/absent) -> 1 (changed symbols only)
+// -> 2 (every symbol, including unchanged). Keyed by any container's id — a file, or
+// (once nested) a class/interface — not just files. See aggregate.mts's nextExpandLevel.
 let expandLevel = new Map<string, number>();
 let showIsolated = true;
 let simulation: any = null;
@@ -53,19 +54,19 @@ let simulation: any = null;
 let nodeMeta = new Map<string, GraphNode>();
 let childrenByParent = new Map<string, GraphNode[]>();
 
-// changed/unchanged/total counts for a file's symbol children, used to decide the
-// next expand level and to show a "+N hidden" badge on the node.
-function symbolCounts(fileId: string): { changed: number; unchanged: number; total: number } {
-  const children = childrenByParent.get(fileId) ?? [];
+// changed/unchanged/total counts for a container's direct symbol children, used to
+// decide the next expand level and to show a "+N hidden" badge on the node.
+function symbolCounts(containerId: string): { changed: number; unchanged: number; total: number } {
+  const children = childrenByParent.get(containerId) ?? [];
   const changed = visibleChildren(children, 1).length;
   return { changed, unchanged: children.length - changed, total: children.length };
 }
 
-// How many of a file's symbols aren't currently shown, at its current expand level.
-function hiddenCount(fileId: string): number {
-  const { total } = symbolCounts(fileId);
-  const level = expandLevel.get(fileId) ?? 0;
-  return total - visibleChildren(childrenByParent.get(fileId) ?? [], level).length;
+// How many of a container's direct children aren't currently shown, at its current expand level.
+function hiddenCount(containerId: string): number {
+  const { total } = symbolCounts(containerId);
+  const level = expandLevel.get(containerId) ?? 0;
+  return total - visibleChildren(childrenByParent.get(containerId) ?? [], level).length;
 }
 
 const svg = d3.select('#svg');
@@ -115,7 +116,13 @@ function render() {
 
   const fileNodes = rawNodes.filter(n => !n.parent);
 
-  const allNodes: any[] = [], allLinks: any[] = [], nodeById = new Map<string, any>(), groupSymbols = new Map<string, any[]>();
+  const allNodes: any[] = [], allLinks: any[] = [], nodeById = new Map<string, any>();
+  // containerId -> every visible descendant at ANY depth (not just direct children) —
+  // used both to size a container's bounding hull around its whole subtree and to
+  // exempt that whole subtree from being repelled by an ancestor container's boundary
+  // (see forceGroup below). A class nested in an expanded file gets its own entry here
+  // alongside the file's, so hulls nest visually the same way the containers do.
+  const groupSymbols = new Map<string, any[]>();
 
   // Snapshot current positions so existing nodes don't jump
   const posCache = new Map<string, { x: number; y: number }>();
@@ -131,22 +138,39 @@ function render() {
     if (pos) { node.x = pos.x; node.y = pos.y; }
     allNodes.push(node); nodeById.set(n.id, node);
   }
+
+  // Breadth-first by depth, so shallower containers are always pushed (and painted)
+  // before deeper ones — same order as before when nesting only ran one level deep,
+  // just no longer capped there. Each frontier entry carries its full ancestor chain
+  // so a node registers itself in every ancestor's (transitive) groupSymbols entry,
+  // not just its immediate parent's.
+  let frontier: { node: GraphNode; ancestors: string[] }[] = [];
   for (const n of fileNodes) {
-    const cs = visibleChildren(childrenByParent.get(n.id) ?? [], expandLevel.get(n.id) ?? 0);
-    if (cs.length) {
-      const parent = nodeById.get(n.id);
-      const group: any[] = [];
-      for (const sym of cs) {
-        const ep = posCache.get(sym.id);
-        const sn = Object.assign({}, sym, {
-          _type: 'symbol', _parent: n.id,
-          x: (ep && ep.x) || ((parent && parent.x) || 0) + (Math.random() - 0.5) * 60,
-          y: (ep && ep.y) || ((parent && parent.y) || 0) + (Math.random() - 0.5) * 60,
-        });
-        allNodes.push(sn); nodeById.set(sym.id, sn); group.push(sn);
-      }
-      groupSymbols.set(n.id, group);
+    for (const child of visibleChildren(childrenByParent.get(n.id) ?? [], expandLevel.get(n.id) ?? 0)) {
+      frontier.push({ node: child, ancestors: [n.id] });
     }
+  }
+  while (frontier.length) {
+    const next: { node: GraphNode; ancestors: string[] }[] = [];
+    for (const { node: n, ancestors } of frontier) {
+      const parentId = ancestors[ancestors.length - 1];
+      const parent = nodeById.get(parentId);
+      const ep = posCache.get(n.id);
+      const sn = Object.assign({}, n, {
+        _type: 'symbol', _parent: parentId, _scale: depthScale(ancestors.length),
+        x: (ep && ep.x) || ((parent && parent.x) || 0) + (Math.random() - 0.5) * 60,
+        y: (ep && ep.y) || ((parent && parent.y) || 0) + (Math.random() - 0.5) * 60,
+      });
+      allNodes.push(sn); nodeById.set(n.id, sn);
+      for (const a of ancestors) {
+        if (!groupSymbols.has(a)) groupSymbols.set(a, []);
+        groupSymbols.get(a)!.push(sn);
+      }
+      for (const child of visibleChildren(childrenByParent.get(n.id) ?? [], expandLevel.get(n.id) ?? 0)) {
+        next.push({ node: child, ancestors: [...ancestors, n.id] });
+      }
+    }
+    frontier = next;
   }
 
   // ── Build effective link set ─────────────────────────────────────────────
@@ -275,10 +299,35 @@ function render() {
   nodeSel.filter((d: any) => d._type === 'file').append('circle')
     .attr('r', 10).attr('fill', (d: any) => nodeColor(d)).attr('stroke', 'none');
 
-  // A badge inside the file's own <g> (not the labels group, so it moves with the node
-  // without needing its own tick tracking) communicates what double-clicking does next:
-  // "+N" when there's more to reveal, "-" when there's nothing left and it'll collapse.
-  nodeSel.filter((d: any) => d._type === 'file').each(function (this: any, d: any) {
+  nodeSel.filter((d: any) => d._type === 'symbol').each(function (this: any, d: any) {
+    const g = d3.select(this);
+    const col = symColor(d);
+    const sh = symShape(d);
+    const s = d._scale ?? 1;
+    if (sh === 'triangle') {
+      g.append('polygon').attr('points', `0,${-8*s} ${7*s},${5*s} ${-7*s},${5*s}`)
+        .attr('fill', col).attr('stroke', col).attr('stroke-width', 1);
+    } else if (sh === 'square') {
+      // Same nominal radius (7) as the circle/triangle branches, so a class glyph
+      // isn't visibly smaller than a function/property glyph at the same depth.
+      g.append('rect').attr('x', -7*s).attr('y', -7*s).attr('width', 14*s).attr('height', 14*s).attr('rx', 1)
+        .attr('fill', col).attr('stroke', col).attr('stroke-width', 1);
+    } else {
+      g.append('circle').attr('r', 7*s)
+        .attr('fill', col).attr('stroke', col).attr('stroke-width', 1);
+    }
+  });
+
+  // A badge inside the container's own <g> (not the labels group, so it moves with the
+  // node without needing its own tick tracking) communicates what double-clicking does
+  // next: "+N" when there's more to reveal, "-" when there's nothing left and it'll
+  // collapse. Shown on any expandable node — a file, or a container symbol like a class.
+  // Appended last (after every node's own shape above) so it always paints on top,
+  // rather than being covered by a symbol's own circle/rect/triangle. Scaled by the
+  // same _scale as its owning node's glyph (1 for a file, shrinking with depth for
+  // everything nested under it), so a class's badge and a method's badge shrink in
+  // step with the shapes they're attached to instead of all being one fixed size.
+  nodeSel.filter((d: any) => expandable(d)).each(function (this: any, d: any) {
     const level = expandLevel.get(d.id) ?? 0;
     const { changed, unchanged } = symbolCounts(d.id);
     const hidden = hiddenCount(d.id);
@@ -286,28 +335,13 @@ function render() {
     if (hidden <= 0 && !collapsesNext) return;
 
     const g = d3.select(this);
-    const cx = 7, cy = 7;
-    g.append('circle').attr('cx', cx).attr('cy', cy).attr('r', 7)
+    const s = d._scale ?? 1;
+    const cx = 7*s, cy = 7*s;
+    g.append('circle').attr('cx', cx).attr('cy', cy).attr('r', 7*s)
       .attr('fill', '#30363d').attr('stroke', '#7d8590').attr('stroke-width', 1);
     g.append('text').attr('x', cx).attr('y', cy).attr('text-anchor', 'middle')
-      .style('font-size', '9px').style('fill', '#adbac7').style('pointer-events', 'none').style('dominant-baseline', 'central')
+      .style('font-size', (9*s) + 'px').style('fill', '#adbac7').style('pointer-events', 'none').style('dominant-baseline', 'central')
       .text(hidden > 0 ? '+' + hidden : '-');
-  });
-
-  nodeSel.filter((d: any) => d._type === 'symbol').each(function (this: any, d: any) {
-    const g = d3.select(this);
-    const col = symColor(d);
-    const sh = symShape(d);
-    if (sh === 'triangle') {
-      g.append('polygon').attr('points', '0,-8 7,5 -7,5')
-        .attr('fill', col).attr('stroke', col).attr('stroke-width', 1);
-    } else if (sh === 'square') {
-      g.append('rect').attr('x', -6).attr('y', -6).attr('width', 12).attr('height', 12).attr('rx', 1)
-        .attr('fill', col).attr('stroke', col).attr('stroke-width', 1);
-    } else {
-      g.append('circle').attr('r', 7)
-        .attr('fill', col).attr('stroke', col).attr('stroke-width', 1);
-    }
   });
 
   // Labels get their own top-level group, appended after .nodes, so every
@@ -338,9 +372,20 @@ function symShape(d: any): string {
   return 'circle'; // property, const, field, unknown
 }
 
-// A file node is expandable if it has any symbol children at all (changed or not).
+// Each level of nesting shrinks a symbol's glyph and badge by this fraction relative
+// to its parent, down to a floor so deep nesting never becomes unreadable: a class
+// (depth 1) is smaller than its file, a method (depth 2) smaller still than its class.
+const CHILD_SCALE_STEP = 0.78;
+const CHILD_SCALE_FLOOR = 0.5;
+function depthScale(depth: number): number {
+  return Math.max(CHILD_SCALE_FLOOR, Math.pow(CHILD_SCALE_STEP, depth));
+}
+
+// A node is expandable if it has any (direct) children at all, changed or not —
+// true for a file, and equally for a container symbol like a class once it has
+// children of its own.
 function expandable(d: any): boolean {
-  return d._type === 'file' && symbolCounts(d.id).total > 0;
+  return symbolCounts(d.id).total > 0;
 }
 
 function handleDblClick(d: any) {
@@ -352,10 +397,10 @@ function handleDblClick(d: any) {
 }
 
 const tooltip = document.getElementById('tooltip')!;
-// What double-clicking this file would do next, or '' if it's not expandable at all.
-function expandHint(fileId: string): string {
-  const { changed, unchanged } = symbolCounts(fileId);
-  const current = expandLevel.get(fileId) ?? 0;
+// What double-clicking this container would do next, or '' if it's not expandable at all.
+function expandHint(containerId: string): string {
+  const { changed, unchanged } = symbolCounts(containerId);
+  const current = expandLevel.get(containerId) ?? 0;
   const next = nextExpandLevel(current, changed, unchanged);
   if (next === current) return '';
   if (next === 0) return 'double-click to collapse';
@@ -367,7 +412,7 @@ function showTooltip(event: MouseEvent, d: any) {
   const s = nodeStatus(d);
   const col = s ? STATUS_COLOR[s] : '';
   const badge = s ? ' <span style="color:' + col + ';font-weight:700">[' + s + ']</span>' : '';
-  const hintText = d._type === 'file' ? expandHint(d.id) : '';
+  const hintText = expandable(d) ? expandHint(d.id) : '';
   const hint = hintText ? '<br>' + hintText : '';
   tooltip.innerHTML = '<strong>' + (d.label ?? shortLabel(d.id)) + '</strong><span class="meta">' +
     (d._type === 'symbol' ? (d.type || 'symbol') : 'file') + badge + hint + '</span>';
