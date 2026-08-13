@@ -31,7 +31,7 @@ npm runs this package's `prepare` script on install, which builds the TypeScript
 ```ts
 import { parsePr, startViewer } from "dep-graph-core";
 
-const { nodes, links } = parsePr({
+const { nodes, edges } = parsePr({
   repoPath: "/path/to/repo",  // absolute path to a local git checkout
   prRef: "FETCH_HEAD",        // any git ref / commit SHA
   baseRef: "main",            // optional: override the base branch (default "HEAD")
@@ -39,17 +39,39 @@ const { nodes, links } = parsePr({
 });
 
 // Look at it in a browser:
-const viewer = await startViewer({ title: "My PR", nodes, links });
+const viewer = await startViewer({ title: "My PR", nodes, edges });
 console.log(viewer.url); // http://127.0.0.1:PORT/
 
 // Push an updated graph to any open browser tab:
-viewer.setGraph({ title: "My PR (updated)", nodes: newNodes, links: newLinks });
+viewer.setGraph({ title: "My PR (updated)", nodes: newNodes, edges: newEdges });
 
 // Shut the server down:
 await viewer.close();
 ```
 
 `parsePr` has no dependency on `startViewer` — use it standalone if you just want the graph data (e.g. to render with your own UI, or serialize to JSON).
+
+### Graph data shape
+
+Nodes and edges are a deliberately minimal, generic graph shape — no visualization-specific fields, so the parser and any viewer stay decoupled:
+
+```ts
+interface GraphNode {
+  id: string;        // e.g. "src/foo.ts" (file) or "src/foo.ts:::bar" (symbol)
+  type: string;       // "file" for file nodes, or a symbol kind: function/method/class/interface/type/enum/property/const
+  parent?: string;    // for symbol nodes, the id of their containing file
+  status?: string;    // "added" | "modified" | "removed" | "unchanged"
+}
+
+interface GraphEdge {
+  src: string;         // source node id
+  tar: string;         // target node id
+  type: string;        // "import" | "call" | "sibling"
+  status?: string | null;
+}
+```
+
+A symbol is just a node like any other, flattened alongside its file rather than nested inside it — `parent` is what ties it back to its containing file. There's no separate field for a display label or file path; both are recoverable from `id`.
 
 ### Embedding in a host tool
 

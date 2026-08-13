@@ -1,5 +1,5 @@
 export { parsePr } from "./parse.mjs";
-export type { ParsePrOptions, GraphNode, GraphLink, GraphData } from "./parse.mjs";
+export type { ParsePrOptions, GraphNode, GraphEdge, GraphData } from "./parse.mjs";
 
 export { startViewer } from "./viewer.mjs";
 export type { Viewer } from "./viewer.mjs";

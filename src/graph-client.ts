@@ -1,6 +1,6 @@
 // graph-client.ts - browser-side D3 force graph renderer.
 // Served (after compilation + placeholder substitution) as /graph-client.js
-// by extension.mts. Runs in the canvas iframe with no bundler — plain script,
+// by viewer.mts. Runs in the canvas iframe with no bundler — plain script,
 // no imports/exports.
 
 declare const d3: any;
@@ -8,32 +8,22 @@ declare const d3: any;
 // script reaches the browser.
 declare const __GRAPH_DATA__: GraphData;
 
-interface GraphSymbol {
-  name: string;
-  kind?: string;
-  status?: string;
-  signature?: string;
-  [key: string]: any;
-}
-
+// A node is either a file (no parent) or a symbol (parent = its containing
+// file's id). `type` is "file" for file nodes, or the symbol kind
+// (function/method/class/...) for symbol nodes.
 interface GraphNode {
   id: string;
-  label?: string;
-  path?: string;
+  type: string;
+  parent?: string;
   status?: string;
-  symbols?: GraphSymbol[];
-  signature?: string;
-  kind?: string;
   [key: string]: any;
 }
 
-interface GraphLink {
-  source: string;
-  target: string;
+interface GraphEdge {
+  src: string;
+  tar: string;
+  type: string;
   status?: string | null;
-  _linkType: string;
-  sourceFile?: string;
-  targetFile?: string;
   [key: string]: any;
 }
 
@@ -41,7 +31,7 @@ interface GraphData {
   title?: string;
   error?: string;
   nodes: GraphNode[];
-  links: GraphLink[];
+  edges: GraphEdge[];
 }
 
 const STATUS_COLOR: Record<string, string> = { added: '#56d364', modified: '#e3b341', removed: '#f85149' };
@@ -74,6 +64,23 @@ let graphData: GraphData = __GRAPH_DATA__;
 let expandedNodes = new Set<string>();
 let showIsolated = true;
 let simulation: any = null;
+
+// Rebuilt at the top of every render() from the full (not just visible) node
+// list, so collapsed/never-expanded symbols can still be resolved.
+let nodeMeta = new Map<string, GraphNode>();
+let childrenByParent = new Map<string, GraphNode[]>();
+
+// Resolve any node id (file or symbol) to its containing file's id.
+function fileOf(id: string): string {
+  const n = nodeMeta.get(id);
+  if (n) return n.parent ?? id;
+  const i = id.indexOf(':::');
+  return i === -1 ? id : id.slice(0, i);
+}
+function changedChildren(fileId: string): GraphNode[] {
+  return (childrenByParent.get(fileId) ?? []).filter(s => s.status && s.status !== 'unchanged');
+}
+
 const svg = d3.select('#svg');
 const root = d3.select('#root');
 const zoom = d3.zoom().scaleExtent([0.1, 8]).on('zoom', (e: any) => root.attr('transform', e.transform));
@@ -94,16 +101,24 @@ const defs = svg.append('defs');
 let linkSel: any, nodeSel: any;
 
 function render() {
-  const { nodes: rawAll, links: rawLinks } = graphData;
+  const { nodes: rawNodes, edges: rawEdges } = graphData;
   document.getElementById('graph-title')!.textContent = graphData.title ?? 'Dependency Graph';
-  if (!rawAll || !rawAll.length) {
+  if (!rawNodes || !rawNodes.length) {
     document.getElementById('empty')!.classList.add('show');
     document.getElementById('empty-msg')!.textContent = graphData.error ?? 'No graph loaded.';
     return;
   }
   document.getElementById('empty')!.classList.remove('show');
 
-  const raw = rawAll;
+  nodeMeta = new Map(rawNodes.map(n => [n.id, n]));
+  childrenByParent = new Map();
+  for (const n of rawNodes) {
+    if (!n.parent) continue;
+    if (!childrenByParent.has(n.parent)) childrenByParent.set(n.parent, []);
+    childrenByParent.get(n.parent)!.push(n);
+  }
+
+  const fileNodes = rawNodes.filter(n => !n.parent);
 
   const allNodes: any[] = [], allLinks: any[] = [], nodeById = new Map<string, any>(), groupSymbols = new Map<string, any[]>();
 
@@ -115,28 +130,26 @@ function render() {
   }
   const isFirstRender = posCache.size === 0;
 
-  for (const n of raw) {
+  for (const n of fileNodes) {
     const pos = posCache.get(n.id);
     const node = Object.assign({}, n, { _type: 'file', _expanded: expandedNodes.has(n.id) });
     if (pos) { node.x = pos.x; node.y = pos.y; }
     allNodes.push(node); nodeById.set(n.id, node);
   }
-  for (const n of raw) {
+  for (const n of fileNodes) {
     // Only show symbols that actually changed (signature or body diff)
-    const cs = changedSymbols(n);
+    const cs = changedChildren(n.id);
     if (expandedNodes.has(n.id) && cs.length) {
       const parent = nodeById.get(n.id);
       const group: any[] = [];
       for (const sym of cs) {
-        const sid = n.id + ':::' + sym.name;
-        const ep = posCache.get(sid);
-        const sn = {
-          id: sid, label: sym.name, kind: sym.kind, status: sym.status, _type: 'symbol', _parent: n.id,
-          _parentStatus: n.status,
+        const ep = posCache.get(sym.id);
+        const sn = Object.assign({}, sym, {
+          _type: 'symbol', _parent: n.id, _parentStatus: n.status,
           x: (ep && ep.x) || ((parent && parent.x) || 0) + (Math.random() - 0.5) * 60,
-          y: (ep && ep.y) || ((parent && parent.y) || 0) + (Math.random() - 0.5) * 60
-        };
-        allNodes.push(sn); nodeById.set(sid, sn); group.push(sn);
+          y: (ep && ep.y) || ((parent && parent.y) || 0) + (Math.random() - 0.5) * 60,
+        });
+        allNodes.push(sn); nodeById.set(sym.id, sn); group.push(sn);
       }
       groupSymbols.set(n.id, group);
     }
@@ -146,38 +159,39 @@ function render() {
   const nodeIdSet = new Set(allNodes.map(n => n.id));
 
   // Import links: always file→file, never follow expansion
-  for (const lk of rawLinks) {
-    if (lk._linkType !== 'import') continue;
-    if (nodeIdSet.has(lk.source) && nodeIdSet.has(lk.target)) allLinks.push(Object.assign({}, lk));
+  for (const e of rawEdges) {
+    if (e.type !== 'import') continue;
+    if (nodeIdSet.has(e.src) && nodeIdSet.has(e.tar)) allLinks.push({ source: e.src, target: e.tar, type: e.type, status: e.status });
   }
 
   // Sibling links: structural connectors between co-located component files (.ts/.html/.scss)
-  for (const lk of rawLinks) {
-    if (lk._linkType !== 'sibling') continue;
-    if (nodeIdSet.has(lk.source) && nodeIdSet.has(lk.target)) allLinks.push(Object.assign({}, lk));
+  for (const e of rawEdges) {
+    if (e.type !== 'sibling') continue;
+    if (nodeIdSet.has(e.src) && nodeIdSet.has(e.tar)) allLinks.push({ source: e.src, target: e.tar, type: e.type, status: e.status });
   }
   //   neither expanded:    fileA → fileB
   //   source expanded:     sym → fileB  (falls back to fileA if sym not shown)
   //   both expanded:       sym → sym    (falls back to file if either sym not shown)
   const callLinkKeys = new Set<string>();
-  for (const lk of rawLinks) {
-    if (lk._linkType !== 'call') continue;
+  for (const e of rawEdges) {
+    if (e.type !== 'call') continue;
+    const srcFile = fileOf(e.src), tarFile = fileOf(e.tar);
     // Resolve source: prefer symbol node if file expanded and symbol is visible, else stay on file
-    const srcSym = lk.sourceFile && expandedNodes.has(lk.sourceFile) && nodeIdSet.has(lk.source) ? lk.source : null;
-    const tgtSym = lk.targetFile && expandedNodes.has(lk.targetFile) && nodeIdSet.has(lk.target) ? lk.target : null;
-    const src = srcSym ?? lk.sourceFile;
-    const tgt = tgtSym ?? lk.targetFile;
-    if (!src || !tgt || src === tgt) continue;
-    if (!nodeIdSet.has(src) || !nodeIdSet.has(tgt)) continue;
-    const key = src + '->' + tgt;
+    const srcSym = expandedNodes.has(srcFile) && nodeIdSet.has(e.src) ? e.src : null;
+    const tarSym = expandedNodes.has(tarFile) && nodeIdSet.has(e.tar) ? e.tar : null;
+    const src = srcSym ?? srcFile;
+    const tar = tarSym ?? tarFile;
+    if (src === tar) continue;
+    if (!nodeIdSet.has(src) || !nodeIdSet.has(tar)) continue;
+    const key = src + '->' + tar;
     if (callLinkKeys.has(key)) continue;
     callLinkKeys.add(key);
     // Symbol-level status takes priority; fall back to file status for unchanged symbols
-    const srcFileNode = nodeById.get(lk.sourceFile!);
-    const tgtFileNode = nodeById.get(lk.targetFile!);
-    const callStatus = (lk.status && lk.status !== 'unchanged') ? lk.status
-                     : srcFileNode?.status ?? tgtFileNode?.status ?? null;
-    allLinks.push({ source: src, target: tgt, _linkType: 'call', status: callStatus });
+    const srcFileNode = nodeById.get(srcFile);
+    const tarFileNode = nodeById.get(tarFile);
+    const callStatus = (e.status && e.status !== 'unchanged') ? e.status
+                     : srcFileNode?.status ?? tarFileNode?.status ?? null;
+    allLinks.push({ source: src, target: tar, type: 'call', status: callStatus });
   }
 
   // Degree map for charge scaling (read before D3 mutates source/target to objects)
@@ -239,8 +253,8 @@ function render() {
 
   simulation = d3.forceSimulation(allNodes)
     .force('link', d3.forceLink(allLinks).id((d: any) => d.id)
-      .distance((d: any) => d._linkType === 'sibling' ? 30 : d._linkType === 'import' ? 55 : 70)
-      .strength((d: any) => d._linkType === 'sibling' ? 0.5 : d._linkType === 'import' ? 0.02 : (d._type === 'symbol' ? 0.35 : 0.08)))
+      .distance((d: any) => d.type === 'sibling' ? 30 : d.type === 'import' ? 55 : 70)
+      .strength((d: any) => d.type === 'sibling' ? 0.5 : d.type === 'import' ? 0.02 : (d._type === 'symbol' ? 0.35 : 0.08)))
     .force('charge', d3.forceManyBody().strength((d: any) => {
       if (d._type === 'symbol') return -40;
       const deg = degreeMap.get(d.id) || 0;
@@ -318,11 +332,11 @@ function render() {
     .attr('y', (d: any) => d._expanded ? -14 : 0)
     .attr('text-anchor', (d: any) => d._expanded ? 'middle' : 'start')
     .attr('fill', (d: any) => d._expanded ? '#7d8590' : '#e6edf3')
-    .text((d: any) => shortLabel(d.label || d.id));
+    .text((d: any) => shortLabel(d.id));
 
   nodeSel.filter((d: any) => d._type === 'symbol').append('text')
     .attr('class', 'label').attr('x', 10).attr('y', 0)
-    .text((d: any) => shortLabel(d.label || d.id));
+    .text((d: any) => shortLabel(d.id));
 
 
   simulation.on('tick', () => {
@@ -337,19 +351,15 @@ function render() {
 }
 
 function symShape(d: any): string {
-  const k = d.kind ?? '';
+  const k = d.type ?? '';
   if (k === 'function' || k === 'method') return 'triangle';
   if (k === 'class' || k === 'interface' || k === 'type' || k === 'enum') return 'square';
   return 'circle'; // property, const, field, unknown
 }
 
-function changedSymbols(d: GraphNode): GraphSymbol[] {
-  return (d.symbols ?? []).filter(s => s.status && s.status !== 'unchanged');
-}
-
-// A file node is expandable if it has changed symbols (signature or body diff).
+// A file node is expandable if it has changed symbol children (signature or body diff).
 function expandable(d: any): boolean {
-  return d._type === 'file' && changedSymbols(d).length > 0;
+  return d._type === 'file' && changedChildren(d.id).length > 0;
 }
 
 function handleDblClick(d: any) {
@@ -363,11 +373,10 @@ function showTooltip(event: MouseEvent, d: any) {
   const s = nodeStatus(d);
   const col = s ? STATUS_COLOR[s] : '';
   const badge = s ? ' <span style="color:' + col + ';font-weight:700">[' + s + ']</span>' : '';
-  const sig = d.signature ? '<br><code style="font-size:10px;color:#adbac7">' + d.signature.replace(/</g,'&lt;').slice(0,120) + '</code>' : '';
-  const changed = changedSymbols(d);
+  const changed = d._type === 'file' ? changedChildren(d.id) : [];
   const hint = changed.length ? '<br>double-click to ' + (expandedNodes.has(d.id) ? 'collapse' : 'expand (' + changed.length + ' changed)') : '';
-  tooltip.innerHTML = '<strong>' + shortLabel(d.label || d.id) + '</strong><span class="meta">' +
-    (d._type === 'symbol' ? (d.kind || 'symbol') : (d.path || d.id)) + badge + sig + hint + '</span>';
+  tooltip.innerHTML = '<strong>' + shortLabel(d.id) + '</strong><span class="meta">' +
+    (d._type === 'symbol' ? (d.type || 'symbol') : 'file') + badge + hint + '</span>';
   tooltip.classList.add('visible');
   moveTooltip(event);
 }
@@ -382,10 +391,10 @@ function showLinkTooltip(event: MouseEvent, d: any) {
   const s = d.status && d.status !== 'unchanged' ? d.status : null;
   const col = s ? STATUS_COLOR[s] : '';
   const badge = s ? ' <span style="color:' + col + ';font-weight:700">[' + s + ']</span>' : '';
-  const srcLabel = shortLabel(d.source?.label ?? d.source?.id ?? d.source);
-  const tgtLabel = shortLabel(d.target?.label ?? d.target?.id ?? d.target);
-  tooltip.innerHTML = '<strong>' + d._linkType + '</strong><span class="meta">' +
-    srcLabel + ' &rarr; ' + tgtLabel + badge + '</span>';
+  const srcLabel = shortLabel(d.source?.id ?? d.source);
+  const tarLabel = shortLabel(d.target?.id ?? d.target);
+  tooltip.innerHTML = '<strong>' + d.type + '</strong><span class="meta">' +
+    srcLabel + ' &rarr; ' + tarLabel + badge + '</span>';
   tooltip.classList.add('visible');
   moveTooltip(event);
 }

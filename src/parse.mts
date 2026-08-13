@@ -5,27 +5,26 @@ import { execSync } from "node:child_process";
 import { resolve as resolvePath, dirname, basename, extname, join } from "node:path";
 import { initParsers, parseSource, isAvailable, type Symbol as ParsedSymbol } from "./treesitter.mjs";
 
+// A node is either a file (no parent) or a symbol (parent = its containing file's id).
+// `type` is "file" for file nodes, or the symbol kind (function/method/class/...) for symbol nodes.
 export interface GraphNode {
   id: string;
-  label: string;
-  path: string;
-  status: string;
-  symbols?: (ParsedSymbol & { status: string })[];
+  type: string;
+  parent?: string;
+  status?: string;
 }
 
-export interface GraphLink {
-  source: string;
-  target: string;
+export interface GraphEdge {
+  src: string;
+  tar: string;
+  type: string;
   status?: string | null;
-  _linkType: string;
-  sourceFile?: string;
-  targetFile?: string;
 }
 
 export interface GraphData {
   title?: string;
   nodes: GraphNode[];
-  links: GraphLink[];
+  edges: GraphEdge[];
   error?: string;
 }
 
@@ -61,7 +60,7 @@ export interface ParsePrOptions {
   exclude?: string[];
 }
 
-export function parsePr({ repoPath, prRef = "FETCH_HEAD", baseRef = "HEAD", exclude = [] }: ParsePrOptions): { nodes: GraphNode[]; links: GraphLink[] } {
+export function parsePr({ repoPath, prRef = "FETCH_HEAD", baseRef = "HEAD", exclude = [] }: ParsePrOptions): { nodes: GraphNode[]; edges: GraphEdge[] } {
     const git = (cmd: string) => execSync(`git --no-pager ${cmd}`, { cwd: repoPath, encoding: "utf8" });
     initParsers();
 
@@ -129,11 +128,15 @@ export function parsePr({ repoPath, prRef = "FETCH_HEAD", baseRef = "HEAD", excl
         if (bp) parsedBase.set(filePath, bp);
     }
 
-    // 4. Build nodes with symbol diffs
+    // 4. Build nodes: one per file, plus one flat node per symbol (parent = its file's id).
     const nodes: GraphNode[] = [];
+    // filePath → diffed symbols (with correct per-symbol status), kept for step 6's edge statuses.
+    const fileSymbols = new Map<string, (ParsedSymbol & { status: string })[]>();
+
     for (const [filePath, status] of fileStatus) {
         const pp = parsedPr.get(filePath);
         const bp = parsedBase.get(filePath);
+        const fileId = shortId(filePath);
 
         let symbols: (ParsedSymbol & { status: string })[];
         if (pp || bp) {
@@ -159,21 +162,23 @@ export function parsePr({ repoPath, prRef = "FETCH_HEAD", baseRef = "HEAD", excl
             symbols = extractSymbolsRegex(prContent.get(filePath) || baseContent.get(filePath) || "").map(s => ({ ...s, status: "unchanged" }));
         }
 
-        const node: GraphNode = { id: shortId(filePath), label: shortId(filePath), path: filePath, status };
-        if (symbols.length) node.symbols = symbols;
-        nodes.push(node);
+        fileSymbols.set(filePath, symbols);
+        nodes.push({ id: fileId, type: "file", status });
+        for (const sym of symbols) {
+            nodes.push({ id: `${fileId}:::${sym.name}`, type: sym.kind, parent: fileId, status: sym.status });
+        }
     }
 
     // 5. Build edges
-    const links: GraphLink[]     = [];
+    const edges: GraphEdge[] = [];
     const seenLinks = new Set<string>();
 
-    function addLink(src: string, tgt: string, status: string | null | undefined, linkType = "import") {
-        if (src === tgt) return;
-        const key = `${src}->${tgt}:${linkType}`;
+    function addLink(src: string, tar: string, status: string | null | undefined, type = "import") {
+        if (src === tar) return;
+        const key = `${src}->${tar}:${type}`;
         if (seenLinks.has(key)) return;
         seenLinks.add(key);
-        links.push({ source: src, target: tgt, status, _linkType: linkType });
+        edges.push({ src, tar, type, status });
     }
 
     // Resolve a Go import path to a PR file path via suffix matching (Go files only)
@@ -279,8 +284,8 @@ export function parsePr({ repoPath, prRef = "FETCH_HEAD", baseRef = "HEAD", excl
             const pp = parsedPr.get(srcFile);
             if (!pp) continue;
             const srcFileId = shortId(srcFile);
-            // Build a per-file symbol status lookup so edges carry the symbol's own diff status
-            const symStatus = new Map(pp.symbols.map(s => [s.name, (s as any).status ?? null]));
+            // Per-file symbol status lookup so call edges carry the calling symbol's own diff status
+            const symStatus = new Map((fileSymbols.get(srcFile) ?? []).map(s => [s.name, s.status ?? null]));
             for (const [fnName, callees] of pp.callsByFunction) {
                 const srcSymId = `${srcFileId}:::${fnName}`;
                 const edgeStatus = symStatus.get(fnName) ?? null;
@@ -290,11 +295,7 @@ export function parsePr({ repoPath, prRef = "FETCH_HEAD", baseRef = "HEAD", excl
                         const key = `${srcSymId}->${tgtFileId}:::${callee}:call`;
                         if (seenLinks.has(key)) continue;
                         seenLinks.add(key);
-                        links.push({
-                            source: srcSymId, target: `${tgtFileId}:::${callee}`,
-                            sourceFile: srcFileId, targetFile: tgtFileId,
-                            _linkType: 'call', status: edgeStatus
-                        });
+                        edges.push({ src: srcSymId, tar: `${tgtFileId}:::${callee}`, type: 'call', status: edgeStatus });
                     }
                 }
             }
@@ -312,11 +313,7 @@ export function parsePr({ repoPath, prRef = "FETCH_HEAD", baseRef = "HEAD", excl
                     const key = `${srcFileId}->${tgtFileId}:::${name}:call`;
                     if (seenLinks.has(key)) continue;
                     seenLinks.add(key);
-                    links.push({
-                        source: srcFileId, target: `${tgtFileId}:::${name}`,
-                        sourceFile: srcFileId, targetFile: tgtFileId,
-                        _linkType: 'call'
-                    });
+                    edges.push({ src: srcFileId, tar: `${tgtFileId}:::${name}`, type: 'call', status: null });
                 }
             }
         }
@@ -348,7 +345,7 @@ export function parsePr({ repoPath, prRef = "FETCH_HEAD", baseRef = "HEAD", excl
         }
     }
 
-    return { nodes, links };
+    return { nodes, edges };
 }
 
 // ── Regex fallbacks (used when tree-sitter unavailable) ───────────────────────
@@ -367,7 +364,7 @@ function extractSymbolsRegex(content: string): { kind: string; name: string }[] 
 function buildRegexEdges(
     filePath: string, content: string, srcId: string, status: string,
     prPaths: Set<string>, repoPath: string, shortId: (p: string) => string,
-    addLink: (src: string, tgt: string, status: string | null | undefined, linkType?: string) => void,
+    addLink: (src: string, tar: string, status: string | null | undefined, type?: string) => void,
 ) {
     const dir = dirname(filePath);
     for (const line of content.split("\n")) {

@@ -6,10 +6,10 @@ test("startViewer serves the graph UI, data, and static assets", async () => {
   const viewer = await startViewer({
     title: "Test Graph",
     nodes: [
-      { id: "a.ts", label: "a.ts", path: "a.ts", status: "added" },
-      { id: "b.ts", label: "b.ts", path: "b.ts", status: "modified" },
+      { id: "a.ts", type: "file", status: "added" },
+      { id: "b.ts", type: "file", status: "modified" },
     ],
-    links: [{ source: "a.ts", target: "b.ts", status: "added", _linkType: "import" }],
+    edges: [{ src: "a.ts", tar: "b.ts", status: "added", type: "import" }],
   });
 
   try {
@@ -29,7 +29,7 @@ test("startViewer serves the graph UI, data, and static assets", async () => {
     const graph1 = await (await fetch(viewer.url + "graph")).json();
     assert.equal(graph1.nodes.length, 2);
 
-    viewer.setGraph({ title: "Updated", nodes: [], links: [] });
+    viewer.setGraph({ title: "Updated", nodes: [], edges: [] });
     const graph2 = await (await fetch(viewer.url + "graph")).json();
     assert.equal(graph2.title, "Updated");
     assert.equal(graph2.nodes.length, 0);

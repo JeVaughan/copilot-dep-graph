@@ -24,20 +24,20 @@ export interface Viewer {
 
 function renderHtml(graphData: GraphData | undefined): string {
     const tpl = readFileSync(join(PKG_ROOT, 'graph.html'), 'utf8');
-    const dataJson = JSON.stringify(graphData ?? { nodes: [], links: [], title: 'Dependency Graph' });
+    const dataJson = JSON.stringify(graphData ?? { nodes: [], edges: [], title: 'Dependency Graph' });
     return tpl.replace('__GRAPH_DATA__', dataJson);
 }
 
 function renderClientJs(graphData: GraphData | undefined): string {
     const tpl = readFileSync(join(__dirname, 'graph-client.js'), 'utf8');
-    const dataJson = JSON.stringify(graphData ?? { nodes: [], links: [], title: 'Dependency Graph' });
+    const dataJson = JSON.stringify(graphData ?? { nodes: [], edges: [], title: 'Dependency Graph' });
     return tpl.replace('__GRAPH_DATA__', dataJson);
 }
 
 export function startViewer(initialGraph?: GraphData): Promise<Viewer> {
     return new Promise((resolve) => {
         const sseClients = new Set<ServerResponse>();
-        let graphData: GraphData = initialGraph ?? { nodes: [], links: [], title: "Dependency Graph" };
+        let graphData: GraphData = initialGraph ?? { nodes: [], edges: [], title: "Dependency Graph" };
 
         const server = createServer((req: IncomingMessage, res: ServerResponse) => {
             const url = new URL(req.url!, "http://127.0.0.1");

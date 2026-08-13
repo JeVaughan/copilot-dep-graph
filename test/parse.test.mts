@@ -33,20 +33,35 @@ after(() => {
 });
 
 test("parsePr detects added/modified files and import edges", () => {
-  const { nodes, links } = parsePr({ repoPath, prRef: "HEAD", baseRef: "HEAD~1" });
+  const { nodes, edges } = parsePr({ repoPath, prRef: "HEAD", baseRef: "HEAD~1" });
 
   const byId = new Map(nodes.map(n => [n.id, n]));
   assert.equal(byId.get("a.ts")?.status, "modified");
   assert.equal(byId.get("b.ts")?.status, "added");
 
-  const importLink = links.find(l => l._linkType === "import" && l.source === "b.ts" && l.target === "a.ts");
-  assert.ok(importLink, "expected an import edge from b.ts to a.ts");
+  const importEdge = edges.find(e => e.type === "import" && e.src === "b.ts" && e.tar === "a.ts");
+  assert.ok(importEdge, "expected an import edge from b.ts to a.ts");
+});
+
+test("parsePr flattens symbols into nodes with a parent pointing at their file", () => {
+  const { nodes } = parsePr({ repoPath, prRef: "HEAD", baseRef: "HEAD~1" });
+
+  const base = nodes.find(n => n.id === "a.ts:::base");
+  assert.ok(base, "expected a flat node for a.ts's base() symbol");
+  assert.equal(base?.type, "function");
+  assert.equal(base?.parent, "a.ts");
+  assert.equal(base?.status, "modified");
+
+  const useIt = nodes.find(n => n.id === "b.ts:::useIt");
+  assert.ok(useIt, "expected a flat node for b.ts's useIt() symbol");
+  assert.equal(useIt?.parent, "b.ts");
+  assert.equal(useIt?.status, "added");
 });
 
 test("parsePr detects a symbol-level call edge across files", () => {
-  const { links } = parsePr({ repoPath, prRef: "HEAD", baseRef: "HEAD~1" });
-  const callLink = links.find(l => l._linkType === "call" && l.sourceFile === "b.ts" && l.targetFile === "a.ts");
-  assert.ok(callLink, "expected a call edge from b.ts's useIt() to a.ts's base()");
+  const { edges } = parsePr({ repoPath, prRef: "HEAD", baseRef: "HEAD~1" });
+  const callEdge = edges.find(e => e.type === "call" && e.src === "b.ts:::useIt" && e.tar === "a.ts:::base");
+  assert.ok(callEdge, "expected a call edge from b.ts's useIt() to a.ts's base()");
 });
 
 test("parsePr respects exclude filters", () => {
