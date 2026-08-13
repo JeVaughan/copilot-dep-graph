@@ -43,6 +43,16 @@ export class Widget {
   assert.ok(result.callsByFunction.get("count")?.has("computed"));
 });
 
+test("treats `new X()` as a callee, same as a regular call", () => {
+  const src = `
+export class Widget {
+  private service = new GreetingService();
+}
+`;
+  const result = parseSource(src, ".ts")!;
+  assert.ok(result.callsByFunction.get("service")?.has("GreetingService"));
+});
+
 test("parses Go functions, methods and exported types", () => {
   const src = `
 package main

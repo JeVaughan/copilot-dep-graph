@@ -7,7 +7,7 @@ All parsing is deterministic (git + tree-sitter AST). No AI involved.
 ## Features
 
 - **File-level graph** — every changed file as a node, import/reference edges between them
-- **Symbol-level detail** — changed symbols per file (function/class/type/etc.), with call and named-import edges between symbols
+- **Symbol-level detail** — changed symbols per file (function/class/type/etc.), with call edges between specific symbols (including `new X()`), plus file-level reference edges for named imports that couldn't be attributed to a specific caller
 - **Change status** — added / modified / removed / unchanged, per file and per symbol
 - **Angular signal support** — `computed()`, `signal()`, `input()` class properties correctly traced
 - **Sibling links** — `.ts`/`.html`/`.scss` component triplets grouped together
@@ -67,7 +67,7 @@ interface GraphNode {
 interface GraphEdge {
   src: string;         // source node id
   tar: string;         // target node id
-  type: string;        // "import" | "call" | "sibling"
+  type: string;        // "import" | "call" | "reference" | "sibling"
   status?: string | null;
 }
 ```
@@ -83,7 +83,7 @@ If you're wiring this into something like a GitHub Copilot CLI canvas extension,
 | Action | Result |
 |--------|--------|
 | Double-click file node | Expand/collapse changed symbols |
-| Hover a reference | Shows its type (import / call / sibling), endpoints, and status |
+| Hover a reference | Shows its type (import / call / reference / sibling), endpoints, and status |
 | Drag node | Re-position (layout re-stabilises) |
 | Scroll | Zoom in/out |
 | Click background + drag | Pan |
@@ -98,7 +98,7 @@ If you're wiring this into something like a GitHub Copilot CLI canvas extension,
 
 ## Edge colours
 
-Edge type (import / call / sibling) is not shown as a distinct line style — hover an edge to see it. Colour is status only:
+Edge type (import / call / reference / sibling) is not shown as a distinct line style — hover an edge to see it. Colour is status only:
 
 | Colour | Meaning |
 |--------|---------|

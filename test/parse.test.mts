@@ -68,3 +68,35 @@ test("parsePr respects exclude filters", () => {
   const { nodes } = parsePr({ repoPath, prRef: "HEAD", baseRef: "HEAD~1", exclude: ["b.ts"] });
   assert.ok(!nodes.some(n => n.id === "b.ts"));
 });
+
+test("parsePr never puts a file endpoint on a call edge; unattributed named-import uses become reference edges", () => {
+  const repo2 = mkdtempSync(join(tmpdir(), "dep-graph-core-test-"));
+  const git2 = (cmd: string) => execSync(`git ${cmd}`, { cwd: repo2, encoding: "utf8" });
+  git2("init -q");
+  git2('config user.email "test@example.com"');
+  git2('config user.name "Test"');
+
+  writeFileSync(join(repo2, "placeholder.ts"), `export const placeholder = 1;\n`);
+  git2("add placeholder.ts");
+  git2('commit -q -m base');
+
+  // c.ts and d.ts both land in the same PR, so both are in the diff's file set.
+  // Thing is used only in a type position — never called, never `new`'d.
+  writeFileSync(join(repo2, "c.ts"), `export interface Thing { n: number }\n`);
+  writeFileSync(join(repo2, "d.ts"), `import { Thing } from "./c";\nexport const x: Thing = { n: 1 };\n`);
+  git2("add c.ts d.ts");
+  git2('commit -q -m "add c.ts, d.ts"');
+
+  const { edges } = parsePr({ repoPath: repo2, prRef: "HEAD", baseRef: "HEAD~1" });
+  rmSync(repo2, { recursive: true, force: true });
+
+  for (const e of edges) {
+    if (e.type !== "call") continue;
+    assert.ok(e.src.includes(":::"), `call edge source should be a symbol id, got ${e.src}`);
+    assert.ok(e.tar.includes(":::"), `call edge target should be a symbol id, got ${e.tar}`);
+  }
+
+  const refEdge = edges.find(e => e.type === "reference" && e.src === "d.ts" && e.tar === "c.ts:::Thing");
+  assert.ok(refEdge, "expected a file-level reference edge from d.ts to c.ts's Thing");
+  assert.ok(!edges.some(e => e.type === "call" && e.tar === "c.ts:::Thing"), "Thing is never called/constructed, so no call edge should target it");
+});

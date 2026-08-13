@@ -195,6 +195,22 @@ function render() {
     allLinks.push({ source: src, target: tar, type: 'call', status: callStatus });
   }
 
+  // Reference links: file → named symbol it uses but that couldn't be attributed to a
+  // specific calling symbol (e.g. used only in a type position). Source is always a file.
+  const referenceLinkKeys = new Set<string>();
+  for (const e of rawEdges) {
+    if (e.type !== 'reference') continue;
+    const tarFile = fileOf(e.tar);
+    const tarSym = expandedNodes.has(tarFile) && nodeIdSet.has(e.tar) ? e.tar : null;
+    const tar = tarSym ?? tarFile;
+    if (e.src === tar) continue;
+    if (!nodeIdSet.has(e.src) || !nodeIdSet.has(tar)) continue;
+    const key = e.src + '->' + tar;
+    if (referenceLinkKeys.has(key)) continue;
+    referenceLinkKeys.add(key);
+    allLinks.push({ source: e.src, target: tar, type: 'reference', status: e.status });
+  }
+
   // Degree map for charge scaling (read before D3 mutates source/target to objects)
   const degreeMap = new Map<string, number>();
   for (const l of allLinks) {

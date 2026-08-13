@@ -82,8 +82,8 @@ export function parseSource(content: string, fileExt: string): ParsedSource | nu
 
 function collectCallees(bodyNode: any): Set<string> {
   const out = new Set<string>();
-  for (const call of collect(bodyNode, 'call_expression')) {
-    const fn = call.childForFieldName('function') ?? call.namedChildren[0];
+  for (const call of collect(bodyNode, 'call_expression', 'new_expression')) {
+    const fn = call.childForFieldName('function') ?? call.childForFieldName('constructor') ?? call.namedChildren[0];
     if (!fn) continue;
     if (fn.type === 'identifier') {
       out.add(fn.text);

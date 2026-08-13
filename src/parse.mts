@@ -300,8 +300,9 @@ export function parsePr({ repoPath, prRef = "FETCH_HEAD", baseRef = "HEAD", excl
                     }
                 }
             }
-            // Named-import reference edges: import { X } from '...' → reference to tgtFile:::X
-            // This covers type references, value references, anything explicitly imported by name.
+            // Named-import reference edges: import { X } from '...' → reference to tgtFile:::X,
+            // for names used somewhere in the file but never resolved to a specific calling
+            // symbol above (e.g. used only in a type position). File-level, not a call.
             for (const [modPath, names] of (pp.namedImports ?? new Map<string, Set<string>>())) {
                 const resolved = resolveImports(srcFile, new Set([modPath]));
                 const tgtFile  = [...resolved.keys()][0];
@@ -311,10 +312,10 @@ export function parsePr({ repoPath, prRef = "FETCH_HEAD", baseRef = "HEAD", excl
                 const tgtSymNames = new Set((parsedPr.get(tgtFile)?.symbols ?? []).map(s => s.name));
                 for (const name of names) {
                     if (!tgtSymNames.has(name)) continue;
-                    const key = `${srcFileId}->${tgtFileId}:::${name}:call`;
+                    const key = `${srcFileId}->${tgtFileId}:::${name}:reference`;
                     if (seenLinks.has(key)) continue;
                     seenLinks.add(key);
-                    edges.push({ src: srcFileId, tar: `${tgtFileId}:::${name}`, type: 'call', status: null });
+                    edges.push({ src: srcFileId, tar: `${tgtFileId}:::${name}`, type: 'reference', status: null });
                 }
             }
         }
