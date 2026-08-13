@@ -354,7 +354,6 @@ function render() {
     .selectAll('text').data(allNodes).join('text')
     .attr('class', (d: any) => 'label ' + (d._type === 'symbol' ? 'symbol' : 'file'))
     .attr('x', 0).attr('y', -14).attr('text-anchor', 'middle')
-    .style('fill', (d: any) => d._type === 'file' && d._expanded ? '#7d8590' : null)
     .text((d: any) => d.label ?? shortLabel(d.id));
 
   simulation.on('tick', () => {
