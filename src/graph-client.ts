@@ -163,21 +163,30 @@ function render() {
 
   // A group accumulates every raw edge collapsing onto the same rendered (src, tar) pair:
   // count is the total, statuses is the distinct set of statuses among them (normalized,
-  // null/"unchanged" → "unchanged"), and status is the first-seen one (used for line colour).
-  interface LinkGroup { source: string; target: string; type: string; status: string | null; count: number; statuses: Set<string>; }
+  // null/"unchanged" → "unchanged").
+  interface LinkGroup { source: string; target: string; type: string; count: number; statuses: Set<string>; }
   function addToGroup(groups: Map<string, LinkGroup>, source: string, target: string, type: string, status: string | null | undefined) {
     const key = source + '->' + target;
     let group = groups.get(key);
     if (!group) {
-      group = { source, target, type, status: status ?? null, count: 0, statuses: new Set() };
+      group = { source, target, type, count: 0, statuses: new Set() };
       groups.set(key, group);
     }
     group.count++;
     group.statuses.add(status && status !== 'unchanged' ? status : 'unchanged');
   }
+  // "unchanged" never dilutes a real status (it carries no signal of its own). Two or more
+  // *different* real statuses (e.g. some added, some removed) collapse to "modified" — the
+  // only one of the four that doesn't make a false claim about direction of change.
+  function aggregateStatus(statuses: Set<string>): string | null {
+    const real = [...statuses].filter(s => s !== 'unchanged');
+    if (real.length === 0) return null;
+    if (real.length === 1) return real[0];
+    return 'modified';
+  }
   function flushGroups(groups: Map<string, LinkGroup>) {
     for (const g of groups.values()) {
-      allLinks.push({ source: g.source, target: g.target, type: g.type, status: g.status, count: g.count, statuses: [...g.statuses] });
+      allLinks.push({ source: g.source, target: g.target, type: g.type, status: aggregateStatus(g.statuses), count: g.count, statuses: [...g.statuses] });
     }
   }
 

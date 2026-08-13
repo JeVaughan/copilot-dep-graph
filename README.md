@@ -83,7 +83,7 @@ If you're wiring this into something like a GitHub Copilot CLI canvas extension,
 | Action | Result |
 |--------|--------|
 | Double-click file node | Expand/collapse changed symbols |
-| Hover a reference | Shows its type (import / call / reference / sibling), endpoints, and status — collapsing a file aggregates every underlying reference between two visible nodes into one line, and the tooltip shows how many were merged and every distinct status among them |
+| Hover a reference | Shows its type (import / call / reference / sibling), endpoints, and status — collapsing a file aggregates every underlying reference between two visible nodes into one line. The line's status is the merged result (`unchanged` mixed with a real status just becomes that status; two or more *different* real statuses become `modified`), and the tooltip shows a count plus every distinct status that went into it |
 | Drag node | Re-position (layout re-stabilises) |
 | Scroll | Zoom in/out |
 | Click background + drag | Pan |
