@@ -78,3 +78,9 @@ test("returns null for unsupported extensions and empty content", () => {
   assert.equal(parseSource("export const x = 1;", ".css"), null);
   assert.equal(parseSource("", ".ts"), null);
 });
+
+test("returns null instead of handing null-byte content to the native parser", () => {
+  // Binary files that slip past the extension filter can contain \0, which crashes
+  // some native tree-sitter bindings outright rather than throwing a catchable error.
+  assert.equal(parseSource("export const x = 1;\0binary junk", ".ts"), null);
+});

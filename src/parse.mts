@@ -1,7 +1,7 @@
 // parse.mts - builds a file/symbol dependency graph from a git PR diff.
 // Deterministic (git + tree-sitter AST). No AI involved.
 
-import { execSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { resolve as resolvePath, dirname, basename, extname, join } from "node:path";
 import { initParsers, parseSource, isAvailable, type Symbol as ParsedSymbol } from "./treesitter.mjs";
 import type { GraphNode, GraphEdge } from "./types.mjs";
@@ -41,11 +41,12 @@ export interface ParsePrOptions {
 }
 
 export function parsePr({ repoPath, prRef = "FETCH_HEAD", baseRef = "HEAD", exclude = [] }: ParsePrOptions): { nodes: GraphNode[]; edges: GraphEdge[] } {
-    // Use spawnSync with arg array so shell-special chars (^, !, etc.) are never interpreted.
-    const git = (cmd: string) => {
-        const args = cmd.match(/(?:[^\s"]+|"[^"]*")+/g)!.map(a => a.replace(/^"|"$/g, ''));
+    // Each argument is passed straight to the process via spawnSync's argv array, bypassing
+    // the shell entirely — so shell-special characters in refs (^, !, &, etc.) are never
+    // interpreted, and callers never need to quote/escape anything themselves.
+    const git = (...args: string[]): string => {
         const r = spawnSync("git", ["--no-pager", ...args], { cwd: repoPath, encoding: "utf8", maxBuffer: 32 * 1024 * 1024 });
-        if (r.status !== 0) throw new Error(r.stderr || `git ${args[0]} failed`);
+        if (r.status !== 0) throw new Error(r.stderr || r.error?.message || `git ${args[0]} failed`);
         return r.stdout;
     };
     initParsers();
@@ -55,12 +56,12 @@ export function parsePr({ repoPath, prRef = "FETCH_HEAD", baseRef = "HEAD", excl
     // checkout missed (which happens when HEAD is behind origin/main).
     let effectiveBase = baseRef;
     try {
-        const remoteHead = git("rev-parse --abbrev-ref origin/HEAD").trim(); // e.g. "origin/main"
-        const mergeBase = git(`merge-base ${remoteHead} ${prRef}`).trim();
-        const prSha = git(`rev-parse ${prRef}`).trim();
+        const remoteHead = git("rev-parse", "--abbrev-ref", "origin/HEAD").trim(); // e.g. "origin/main"
+        const mergeBase = git("merge-base", remoteHead, prRef).trim();
+        const prSha = git("rev-parse", prRef).trim();
         // Only use the merge-base if it's strictly behind prRef.
         // If they're equal the PR is already on main and the diff would be empty.
-        effectiveBase = (mergeBase !== prSha) ? mergeBase : git(`rev-parse ${baseRef}`).trim();
+        effectiveBase = (mergeBase !== prSha) ? mergeBase : git("rev-parse", baseRef).trim();
     } catch {
         // Fall back to caller-supplied baseRef if origin/HEAD isn't configured
         effectiveBase = baseRef;
@@ -69,7 +70,7 @@ export function parsePr({ repoPath, prRef = "FETCH_HEAD", baseRef = "HEAD", excl
     // 1. Changed files with status
     const statusMap: Record<string, string> = { A: "added", M: "modified", D: "removed" };
     const fileStatus = new Map<string, string>();
-    const diffLines = git(`diff --name-status ${effectiveBase}...${prRef}`).split("\n");
+    const diffLines = git("diff", "--name-status", `${effectiveBase}...${prRef}`).split("\n");
     for (const line of diffLines) {
         const m = line.match(/^([AMD])\t(.+)$/);
         if (!m) continue;
@@ -95,13 +96,13 @@ export function parsePr({ repoPath, prRef = "FETCH_HEAD", baseRef = "HEAD", excl
     for (const [filePath, status] of fileStatus) {
         let pc = "";
         if (status !== "removed") {
-            try { pc = git(`show "${prRef}:${filePath}"`); } catch {}
+            try { pc = git("show", `${prRef}:${filePath}`); } catch {}
         }
         prContent.set(filePath, pc);
 
         let bc = "";
         if (status !== "added") {
-            try { bc = git(`show "${effectiveBase}:${filePath}"`); } catch {}
+            try { bc = git("show", `${effectiveBase}:${filePath}`); } catch {}
         }
         baseContent.set(filePath, bc);
     }
