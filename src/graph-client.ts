@@ -12,13 +12,17 @@ declare const d3: any;
 // script reaches the browser.
 declare const __GRAPH_DATA__: GraphData;
 
-const STATUS_COLOR: Record<string, string> = { added: '#56d364', modified: '#e3b341', removed: '#f85149' };
-const NODE_NEUTRAL = '#8b949e';
+// Single source of truth for every status colour and opacity in the UI — "unchanged"
+// is just another status here, not a separate fallback constant. Node fill, symbol
+// fill, tooltip badges, arrow markers, link strokes, hull layer, and the toolbar
+// legend (wired up at the bottom of this file) all derive from these.
+const STATUS_COLOR: Record<string, string> = { added: '#56d364', modified: '#e3b341', removed: '#f85149', unchanged: '#8b949e' };
+const STATUS_OPACITY: Record<string, number> = { added: 0.35, modified: 0.35, removed: 0.30, unchanged: 0.45 };
 function nodeStatus(d: any): string | null { return d.status ?? null; }
-function nodeColor(d: any): string { return d.status ? STATUS_COLOR[d.status] : NODE_NEUTRAL; }
+function nodeColor(d: any): string { return STATUS_COLOR[d.status ?? 'unchanged']; }
 function symColor(d: any): string {
   const s = d.status && d.status !== 'unchanged' ? d.status : d._parentStatus;
-  return (s && s !== 'unchanged') ? STATUS_COLOR[s] : '#8b949e';
+  return STATUS_COLOR[s && s !== 'unchanged' ? s : 'unchanged'];
 }
 function shortLabel(id: string): string { return (id ?? '').split('/').pop()!; }
 
@@ -57,18 +61,24 @@ const root = d3.select('#root');
 const zoom = d3.zoom().scaleExtent([0.1, 8]).on('zoom', (e: any) => root.attr('transform', e.transform));
 svg.call(zoom).on('dblclick.zoom', null);
 const defs = svg.append('defs');
-// Opacity matches the corresponding .link[.status] stroke-opacity in graph.html,
-// so an arrowhead doesn't look like a solid, opaque cap on a faint line.
+// Opacity matches the corresponding link's stroke-opacity (set alongside .attr('stroke', ...)
+// in render() below), so an arrowhead doesn't look like a solid, opaque cap on a faint line.
 [
-  { id: 'arrow', color: '#8b949e', opacity: 0.45 },
-  { id: 'arrow-added', color: '#56d364', opacity: 0.35 },
-  { id: 'arrow-modified', color: '#e3b341', opacity: 0.35 },
-  { id: 'arrow-removed', color: '#f85149', opacity: 0.30 },
+  { id: 'arrow', color: STATUS_COLOR.unchanged, opacity: STATUS_OPACITY.unchanged },
+  { id: 'arrow-added', color: STATUS_COLOR.added, opacity: STATUS_OPACITY.added },
+  { id: 'arrow-modified', color: STATUS_COLOR.modified, opacity: STATUS_OPACITY.modified },
+  { id: 'arrow-removed', color: STATUS_COLOR.removed, opacity: STATUS_OPACITY.removed },
 ].forEach(({ id, color, opacity }) => {
   defs.append('marker')
     .attr('id', id).attr('viewBox', '0 -4 8 8')
     .attr('refX', 18).attr('refY', 0).attr('markerWidth', 4).attr('markerHeight', 4).attr('orient', 'auto')
     .append('path').attr('d', 'M0,-4L8,0L0,4').attr('fill', color).attr('fill-opacity', opacity);
+});
+
+// Toolbar legend colours, from the same STATUS_COLOR map — see graph.html for the markup.
+(['added', 'modified', 'removed'] as const).forEach(status => {
+  const el = document.getElementById('legend-' + status);
+  if (el) el.style.color = STATUS_COLOR[status];
 });
 
 let linkSel: any, nodeSel: any, labelSel: any;
@@ -105,7 +115,7 @@ function render() {
 
   for (const n of fileNodes) {
     const pos = posCache.get(n.id);
-    const node: any = Object.assign({}, n, { _type: 'file', _expanded: expandedNodes.has(n.id) });
+    const node = Object.assign({}, n, { _type: 'file', _expanded: expandedNodes.has(n.id) });
     if (pos) { node.x = pos.x; node.y = pos.y; }
     allNodes.push(node); nodeById.set(n.id, node);
   }
@@ -215,8 +225,8 @@ function render() {
   const hullPaths = new Map<string, any>();
   for (const pid of groupSymbols.keys()) {
     hullPaths.set(pid, hullLayer.append('path')
-      .style('fill', '#8b949e').style('fill-opacity', '0.07')
-      .style('stroke', '#8b949e').style('stroke-opacity', '0.35')
+      .style('fill', STATUS_COLOR.unchanged).style('fill-opacity', '0.07')
+      .style('stroke', STATUS_COLOR.unchanged).style('stroke-opacity', '0.35')
       .style('stroke-width', '1.5').style('pointer-events', 'none'));
   }
 
@@ -229,6 +239,9 @@ function render() {
       const st = d.status && d.status !== 'unchanged' ? ' ' + d.status : '';
       return 'link' + st;
     })
+    .attr('stroke', (d: any) => STATUS_COLOR[d.status ?? 'unchanged'])
+    .attr('stroke-opacity', (d: any) => STATUS_OPACITY[d.status ?? 'unchanged'])
+    .attr('stroke-dasharray', (d: any) => d.status === 'removed' ? '5,3' : null)
     .attr('marker-end', (d: any) => {
       const s = d.status && d.status !== 'unchanged' ? d.status : null;
       return s ? 'url(#arrow-' + s + ')' : 'url(#arrow)';

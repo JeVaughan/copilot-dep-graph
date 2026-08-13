@@ -11,6 +11,10 @@ export interface GraphNode {
   type: string;
   parent?: string;
   status?: string;
+  // Never set by parsePr — populated by the viewer's D3 simulation once a node
+  // is rendered, and reused as a position cache across re-renders.
+  x?: number;
+  y?: number;
 }
 
 export interface GraphEdge {

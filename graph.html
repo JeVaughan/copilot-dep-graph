@@ -19,11 +19,10 @@
     button:hover { background: var(--background-color-emphasis, #21262d); }
     #canvas-wrap { flex: 1; position: relative; overflow: hidden; }
     svg { width: 100%; height: 100%; display: block; }
-    /* Edge type (import / call / sibling) is not shown visually — hover an edge for that. */
-    .link { stroke: #8b949e; stroke-opacity: 0.45; stroke-width: 1.2; cursor: default; }
-    .link.added    { stroke: #56d364; stroke-opacity: 0.35; }
-    .link.modified { stroke: #e3b341; stroke-opacity: 0.35; }
-    .link.removed  { stroke: #f85149; stroke-opacity: 0.30; stroke-dasharray: 5,3; }
+    /* Edge type (import / call / sibling) is not shown visually — hover an edge for that.
+       Status colour/opacity/dasharray is set in JS (graph-client.ts), not here, so there's
+       one source of truth shared with node fills, arrow markers, and the legend below. */
+    .link { stroke-width: 1.2; cursor: default; }
     .node circle { cursor: default; }
     .node.expandable circle { cursor: pointer; }
     .label { pointer-events: none; dominant-baseline: central; }
@@ -51,9 +50,9 @@
     <button id="btn-reset-expand">Collapse all</button>
     <span style="flex:1"></span>
     <span style="display:flex;align-items:center;gap:10px;font-size:11px;color:#7d8590">
-      <span style="color:#56d364;font-weight:600">+ added</span>
-      <span style="color:#e3b341;font-weight:600">~ modified</span>
-      <span style="color:#f85149;font-weight:600">- removed</span>
+      <span id="legend-added" style="font-weight:600">+ added</span>
+      <span id="legend-modified" style="font-weight:600">~ modified</span>
+      <span id="legend-removed" style="font-weight:600">- removed</span>
       <span style="color:#adbac7">&#9650; fn/method</span>
       <span style="color:#adbac7">&#9632; class/type</span>
       <span style="color:#adbac7">&#9679; prop/const</span>
