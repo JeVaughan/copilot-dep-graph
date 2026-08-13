@@ -30,8 +30,27 @@ function hullPath(pts: number[][], pad: number): string {
   const cx = pts.reduce((s, p) => s + p[0], 0) / pts.length;
   const cy = pts.reduce((s, p) => s + p[1], 0) / pts.length;
   if (pts.length < 3) {
-    const r = pad + 20;
-    return 'M ' + (cx-r) + ',' + cy + ' a' + r + ',' + r + ' 0 1,0 ' + (r*2) + ',0 a' + r + ',' + r + ' 0 1,0 -' + (r*2) + ',0';
+    // An ellipse elongated along the line between the (1 or 2) points, rather than a
+    // fixed-radius circle centered on their midpoint — a circle either fails to reach
+    // two far-apart points or sits needlessly oversized around two close ones. The
+    // minor axis is a factor of pad (not an added constant), so it scales down with
+    // pad at every depth instead of becoming relatively oversized when pad shrinks.
+    // Degenerates to a circle of radius 1.2*pad when the points coincide or are close.
+    const [p0, p1] = pts.length === 2 ? pts : [pts[0], pts[0]];
+    const dx = p1[0] - p0[0], dy = p1[1] - p0[1];
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    const angle = Math.atan2(dy, dx);
+    const a = Math.max(1.2 * pad, dist / 2 + pad); // semi-major, along the two points
+    const b = 1.2 * pad;                            // semi-minor, across them
+    const cos = Math.cos(angle), sin = Math.sin(angle);
+    const N = 24;
+    const ellipse: number[][] = [];
+    for (let i = 0; i < N; i++) {
+      const t = (i / N) * 2 * Math.PI;
+      const ex = a * Math.cos(t), ey = b * Math.sin(t);
+      ellipse.push([cx + ex * cos - ey * sin, cy + ex * sin + ey * cos]);
+    }
+    return d3.line().curve(d3.curveCatmullRomClosed.alpha(0.5))(ellipse);
   }
   const hull = d3.polygonHull(pts) ?? pts;
   const padded = hull.map((p: number[]) => {
@@ -123,6 +142,11 @@ function render() {
   // (see forceGroup below). A class nested in an expanded file gets its own entry here
   // alongside the file's, so hulls nest visually the same way the containers do.
   const groupSymbols = new Map<string, any[]>();
+  // containerId -> its own nesting depth (0 for a file), so each container's hull can
+  // pad itself down by the same depthScale() as its members' glyphs — an outer file
+  // hull stays roomy, a hull nested a level deeper draws tighter around its contents.
+  const containerDepth = new Map<string, number>();
+  for (const n of fileNodes) containerDepth.set(n.id, 0);
 
   // Snapshot current positions so existing nodes don't jump
   const posCache = new Map<string, { x: number; y: number }>();
@@ -162,6 +186,7 @@ function render() {
         y: (ep && ep.y) || ((parent && parent.y) || 0) + (Math.random() - 0.5) * 60,
       });
       allNodes.push(sn); nodeById.set(n.id, sn);
+      containerDepth.set(n.id, ancestors.length);
       for (const a of ancestors) {
         if (!groupSymbols.has(a)) groupSymbols.set(a, []);
         groupSymbols.get(a)!.push(sn);
@@ -259,9 +284,10 @@ function render() {
   const hullLayer = root.insert('g', ':first-child').attr('class', 'hull-layer');
   const hullPaths = new Map<string, any>();
   for (const pid of groupSymbols.keys()) {
+    const col = hullColor(containerDepth.get(pid) ?? 0);
     hullPaths.set(pid, hullLayer.append('path')
-      .style('fill', STATUS_COLOR.unchanged).style('fill-opacity', '0.07')
-      .style('stroke', STATUS_COLOR.unchanged).style('stroke-opacity', '0.35')
+      .style('fill', col).style('fill-opacity', '0.07')
+      .style('stroke', col).style('stroke-opacity', '0.35')
       .style('stroke-width', '1.5').style('pointer-events', 'none'));
   }
 
@@ -360,7 +386,9 @@ function render() {
     labelSel.attr('transform', (d: any) => 'translate(' + (d.x || 0) + ',' + (d.y || 0) + ')');
     groupSymbols.forEach((syms, pid) => {
       const p = nodeById.get(pid);
-      if (p) hullPaths.get(pid).attr('d', hullPath([[p.x, p.y]].concat(syms.map(s => [s.x, s.y])), 22));
+      if (!p) return;
+      const pad = HULL_BASE_PAD * depthScale(containerDepth.get(pid) ?? 0);
+      hullPaths.get(pid).attr('d', hullPath([[p.x, p.y]].concat(syms.map(s => [s.x, s.y])), pad));
     });
   });
 }
@@ -379,6 +407,21 @@ const CHILD_SCALE_STEP = 0.78;
 const CHILD_SCALE_FLOOR = 0.5;
 function depthScale(depth: number): number {
   return Math.max(CHILD_SCALE_FLOOR, Math.pow(CHILD_SCALE_STEP, depth));
+}
+
+// A container's hull padding is HULL_BASE_PAD * depthScale(its own depth) — wider than
+// a single node's own scaling at the outermost (file) level, then shrinking the same
+// way glyphs do, so a hull nested a level deeper draws tighter around its (already
+// smaller) contents instead of carrying the same fixed padding as its parent's hull.
+const HULL_BASE_PAD = 36;
+
+// Hull colour: a dark blue at the outermost (file) level, lightening toward white at
+// each deeper level — reuses the same depthScale() everything else scales by (as the
+// fraction lightened, 1 - depthScale) so a class's hull and a method's hull get
+// progressively lighter in the same proportion their padding shrinks.
+const HULL_BASE_COLOR = '#1d4e89';
+function hullColor(depth: number): string {
+  return d3.interpolateRgb(HULL_BASE_COLOR, '#ffffff')(1 - depthScale(depth));
 }
 
 // A node is expandable if it has any (direct) children at all, changed or not —
