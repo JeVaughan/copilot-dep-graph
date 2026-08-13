@@ -162,7 +162,10 @@ function render() {
 
   for (const n of fileNodes) {
     const pos = posCache.get(n.id);
-    const node = Object.assign({}, n, { _type: 'file' });
+    // _scale is set here too (depthScale(0) === 1) so every node — file or symbol —
+    // carries a real, uniformly-computed scale; nothing downstream needs a `?? 1`
+    // fallback to cover the file case specially.
+    const node = Object.assign({}, n, { _type: 'file', _scale: depthScale(0) });
     if (pos) { node.x = pos.x; node.y = pos.y; }
     allNodes.push(node); nodeById.set(n.id, node);
   }
@@ -239,13 +242,17 @@ function render() {
     const R_ATTRACT = 65, K_ATTRACT = 0.25;
     const GROUP_PAD = 35; // padding around group bounding circle
 
-    // 1. Pull each symbol toward its parent
+    // 1. Pull each symbol toward its parent. The leash is a pure distance, like the
+    // collision radius, so it uses _scale² (not _scale) to shrink in step with the
+    // symbol's felt (area) size rather than lagging behind its linear glyph radius.
     for (const nd of allNodes) {
       if (nd._type !== 'symbol') continue;
       const p = nodeById.get(nd._parent); if (!p) continue;
+      const ndScale = nd._scale ?? 1;
+      const leash = R_ATTRACT * ndScale * ndScale;
       const dx = nd.x - p.x, dy = nd.y - p.y, dist = Math.sqrt(dx*dx + dy*dy) || 1;
-      if (dist > R_ATTRACT) {
-        const pull = (dist - R_ATTRACT) / dist * K_ATTRACT * alpha;
+      if (dist > leash) {
+        const pull = (dist - leash) / dist * K_ATTRACT * alpha;
         nd.vx -= dx * pull; nd.vy -= dy * pull;
       }
     }
@@ -294,7 +301,13 @@ function render() {
     .force('center', isFirstRender ? d3.forceCenter(w/2, h/2) : null)
     .force('gx', d3.forceX(w/2).strength(0.015))
     .force('gy', d3.forceY(h/2).strength(0.015))
-    .force('collision', d3.forceCollide((d: any) => d._type === 'symbol' ? 20 : 48))
+    // One formula for every node, no file/symbol branch: collision radius is always
+    // COLLISION_BASE_RADIUS * d._scale². A file is depth 0 (_scale 1) so it keeps its
+    // existing radius. d._scale is a LINEAR shrink factor on the glyph's radius, but a
+    // glyph's felt "size" is its AREA — radius² — so a pure-distance quantity like
+    // collision radius has to use _scale² to shrink in step with how much smaller the
+    // glyph actually looks, not lag behind it the way a linear factor alone would.
+    .force('collision', d3.forceCollide((d: any) => COLLISION_BASE_RADIUS * d._scale * d._scale))
     .force('grouping', forceGroup)
     .alpha(isFirstRender ? 1 : 0.3)
     .restart();
@@ -438,7 +451,10 @@ function render() {
     groupSymbols.forEach((syms, pid) => {
       const p = nodeById.get(pid);
       if (!p) return;
-      const pad = HULL_BASE_PAD * depthScale(containerDepth.get(pid) ?? 0);
+      // Squared for the same reason the collision radius and parent-leash are: pad is
+      // a pure distance, so it should shrink with the container's felt (area) size.
+      const containerScale = depthScale(containerDepth.get(pid) ?? 0);
+      const pad = HULL_BASE_PAD * containerScale * containerScale;
       hullPaths.get(pid).attr('d', hullPath([[p.x, p.y]].concat(syms.map(s => [s.x, s.y])), pad));
     });
   });
@@ -460,10 +476,18 @@ function depthScale(depth: number): number {
   return Math.max(CHILD_SCALE_FLOOR, Math.pow(CHILD_SCALE_STEP, depth));
 }
 
-// A container's hull padding is HULL_BASE_PAD * depthScale(its own depth) — wider than
-// a single node's own scaling at the outermost (file) level, then shrinking the same
-// way glyphs do, so a hull nested a level deeper draws tighter around its (already
-// smaller) contents instead of carrying the same fixed padding as its parent's hull.
+// A file's collision radius before any depth scaling (a file is always depth 0, so
+// this is also its actual radius). Every node's collision radius is this same base
+// times depthScale(its own depth)² — no separate file/symbol formula. Squared because
+// collision radius is a pure distance, not a glyph dimension: a glyph's felt "size" is
+// its area (radius²), so a distance meant to track that felt size needs the same square.
+const COLLISION_BASE_RADIUS = 48;
+
+// A container's hull padding is HULL_BASE_PAD * depthScale(its own depth)² — squared
+// for the same reason the collision radius is — wider than a single node's own glyph
+// scaling at the outermost (file) level, then shrinking so a hull nested a level
+// deeper draws tighter around its (already smaller) contents instead of carrying the
+// same fixed padding as its parent's hull.
 const HULL_BASE_PAD = 36;
 
 // Hull colour: a dark blue at the outermost (file) level, lightening toward white at
