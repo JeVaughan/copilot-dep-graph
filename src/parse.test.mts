@@ -100,3 +100,51 @@ test("parsePr never puts a file endpoint on a call edge; unattributed named-impo
   assert.ok(refEdge, "expected a file-level reference edge from d.ts to c.ts's Thing");
   assert.ok(!edges.some(e => e.type === "call" && e.tar === "c.ts:::Thing"), "Thing is never called/constructed, so no call edge should target it");
 });
+
+test("parsePr passes refs containing shell-special characters (^) through untouched", () => {
+  // git() uses spawnSync's argv array, bypassing the shell entirely, so "HEAD^" must
+  // resolve exactly like "HEAD~1" — not have its "^" stripped/mangled (which is what
+  // happened under the old execSync-based implementation on Windows' cmd.exe).
+  const byCaret = parsePr({ repoPath, prRef: "HEAD", baseRef: "HEAD^" });
+  const byTilde = parsePr({ repoPath, prRef: "HEAD", baseRef: "HEAD~1" });
+  assert.deepEqual(byCaret.nodes, byTilde.nodes);
+  assert.deepEqual(byCaret.edges, byTilde.edges);
+});
+
+test("parsePr falls back to the caller-supplied baseRef when the ref is already on origin/HEAD", () => {
+  // merge-base(origin/HEAD, prRef) === prRef itself happens when prRef is already
+  // merged/pushed to the remote's default branch — without the fallback this collapses
+  // effectiveBase to prRef too, producing an empty diff.
+  const bareDir = mkdtempSync(join(tmpdir(), "dep-graph-core-bare-"));
+  execSync(`git init -q --bare "${bareDir}"`);
+
+  const workDir = mkdtempSync(join(tmpdir(), "dep-graph-core-work-"));
+  const gitWork = (cmd: string) => execSync(`git ${cmd}`, { cwd: workDir, encoding: "utf8" });
+  gitWork("init -q");
+  gitWork('config user.email "test@example.com"');
+  gitWork('config user.name "Test"');
+  gitWork(`remote add origin "${bareDir}"`);
+
+  writeFileSync(join(workDir, "a.ts"), `export const a = 1;\n`);
+  gitWork("add a.ts");
+  gitWork('commit -q -m base');
+  gitWork("push -q origin HEAD:main");
+
+  writeFileSync(join(workDir, "a.ts"), `export const a = 2;\n`);
+  gitWork("add a.ts");
+  gitWork('commit -q -m "modify a"');
+  gitWork("push -q origin HEAD:main");
+  gitWork("fetch -q origin");
+  // Point origin/HEAD at origin/main directly, same as a real clone would set up.
+  gitWork("symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main");
+
+  try {
+    const { nodes } = parsePr({ repoPath: workDir, prRef: "HEAD", baseRef: "HEAD~1" });
+    const a = nodes.find(n => n.id === "a.ts");
+    assert.ok(a, "expected a.ts to appear in the diff instead of an empty diff");
+    assert.equal(a?.status, "modified");
+  } finally {
+    rmSync(bareDir, { recursive: true, force: true });
+    rmSync(workDir, { recursive: true, force: true });
+  }
+});
