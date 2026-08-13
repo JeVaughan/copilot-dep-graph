@@ -48,9 +48,9 @@ if (repoPath) {
       { id: "c.ts", label: "c.ts", type: "file", status: "removed" },
     ],
     edges: [
-      { src: "a.ts", tar: "b.ts", status: "added", type: "import" },
-      { src: "b.ts", tar: "c.ts", status: "removed", type: "import" },
-      { src: "b.ts:::doStuff", tar: "a.ts:::helper", status: null, type: "call" },
+      { src: "a.ts", tar: "b.ts", status: "added", type: "import", count: 1 },
+      { src: "b.ts", tar: "c.ts", status: "removed", type: "import", count: 1 },
+      { src: "b.ts:::doStuff", tar: "a.ts:::helper", status: null, type: "call", count: 1 },
     ],
   };
 }

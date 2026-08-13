@@ -1,7 +1,10 @@
 // graph-client.ts - browser-side D3 force graph renderer.
 // Served (after compilation + placeholder substitution) as /graph-client.js
-// by viewer.mts. Runs in the canvas iframe with no bundler — plain script,
-// no imports/exports.
+// by viewer.mts. Loaded as a real ES module (<script type="module">) so it can
+// share aggregate.mts's collapsing logic with the Node-side tests, rather than
+// duplicating it.
+
+import { buildLinks } from "./aggregate.mjs";
 
 declare const d3: any;
 // Substituted server-side (see renderClientJs in viewer.mts) before this
@@ -25,6 +28,7 @@ interface GraphEdge {
   tar: string;
   type: string;
   status?: string | null;
+  count: number;
   [key: string]: any;
 }
 
@@ -71,13 +75,6 @@ let simulation: any = null;
 let nodeMeta = new Map<string, GraphNode>();
 let childrenByParent = new Map<string, GraphNode[]>();
 
-// Resolve any node id (file or symbol) to its containing file's id.
-function fileOf(id: string): string {
-  const n = nodeMeta.get(id);
-  if (n) return n.parent ?? id;
-  const i = id.indexOf(':::');
-  return i === -1 ? id : id.slice(0, i);
-}
 function changedChildren(fileId: string): GraphNode[] {
   return (childrenByParent.get(fileId) ?? []).filter(s => s.status && s.status !== 'unchanged');
 }
@@ -159,89 +156,12 @@ function render() {
   }
 
   // ── Build effective link set ─────────────────────────────────────────────
-  const nodeIdSet = new Set(allNodes.map(n => n.id));
-
-  // A group accumulates every raw edge collapsing onto the same rendered (src, tar) pair:
-  // count is the total, statuses is the distinct set of statuses among them (normalized,
-  // null/"unchanged" → "unchanged").
-  interface LinkGroup { source: string; target: string; type: string; count: number; statuses: Set<string>; }
-  function addToGroup(groups: Map<string, LinkGroup>, source: string, target: string, type: string, status: string | null | undefined) {
-    const key = source + '->' + target;
-    let group = groups.get(key);
-    if (!group) {
-      group = { source, target, type, count: 0, statuses: new Set() };
-      groups.set(key, group);
-    }
-    group.count++;
-    group.statuses.add(status && status !== 'unchanged' ? status : 'unchanged');
+  // buildLinks (aggregate.mts) resolves each edge against which files are expanded
+  // and which symbols are actually visible, collapsing everything that lands on the
+  // same (src, tar) pair — regardless of original edge type — into one summary edge.
+  for (const e of buildLinks(rawNodes, rawEdges, expandedNodes)) {
+    allLinks.push({ source: e.src, target: e.tar, type: e.type, status: e.status, count: e.count });
   }
-  // "unchanged" never dilutes a real status (it carries no signal of its own). Two or more
-  // *different* real statuses (e.g. some added, some removed) collapse to "modified" — the
-  // only one of the four that doesn't make a false claim about direction of change.
-  function aggregateStatus(statuses: Set<string>): string | null {
-    const real = [...statuses].filter(s => s !== 'unchanged');
-    if (real.length === 0) return null;
-    if (real.length === 1) return real[0];
-    return 'modified';
-  }
-  function flushGroups(groups: Map<string, LinkGroup>) {
-    for (const g of groups.values()) {
-      allLinks.push({ source: g.source, target: g.target, type: g.type, status: aggregateStatus(g.statuses), count: g.count, statuses: [...g.statuses] });
-    }
-  }
-
-  // Import links: always file→file, never follow expansion
-  const importGroups = new Map<string, LinkGroup>();
-  for (const e of rawEdges) {
-    if (e.type !== 'import') continue;
-    if (nodeIdSet.has(e.src) && nodeIdSet.has(e.tar)) addToGroup(importGroups, e.src, e.tar, 'import', e.status);
-  }
-  flushGroups(importGroups);
-
-  // Sibling links: structural connectors between co-located component files (.ts/.html/.scss)
-  const siblingGroups = new Map<string, LinkGroup>();
-  for (const e of rawEdges) {
-    if (e.type !== 'sibling') continue;
-    if (nodeIdSet.has(e.src) && nodeIdSet.has(e.tar)) addToGroup(siblingGroups, e.src, e.tar, 'sibling', e.status);
-  }
-  flushGroups(siblingGroups);
-
-  //   neither expanded:    fileA → fileB
-  //   source expanded:     sym → fileB  (falls back to fileA if sym not shown)
-  //   both expanded:       sym → sym    (falls back to file if either sym not shown)
-  const callGroups = new Map<string, LinkGroup>();
-  for (const e of rawEdges) {
-    if (e.type !== 'call') continue;
-    const srcFile = fileOf(e.src), tarFile = fileOf(e.tar);
-    // Resolve source: prefer symbol node if file expanded and symbol is visible, else stay on file
-    const srcSym = expandedNodes.has(srcFile) && nodeIdSet.has(e.src) ? e.src : null;
-    const tarSym = expandedNodes.has(tarFile) && nodeIdSet.has(e.tar) ? e.tar : null;
-    const src = srcSym ?? srcFile;
-    const tar = tarSym ?? tarFile;
-    if (src === tar) continue;
-    if (!nodeIdSet.has(src) || !nodeIdSet.has(tar)) continue;
-    // Symbol-level status takes priority; fall back to file status for unchanged symbols
-    const srcFileNode = nodeById.get(srcFile);
-    const tarFileNode = nodeById.get(tarFile);
-    const callStatus = (e.status && e.status !== 'unchanged') ? e.status
-                     : srcFileNode?.status ?? tarFileNode?.status ?? null;
-    addToGroup(callGroups, src, tar, 'call', callStatus);
-  }
-  flushGroups(callGroups);
-
-  // Reference links: file → named symbol it uses but that couldn't be attributed to a
-  // specific calling symbol (e.g. used only in a type position). Source is always a file.
-  const referenceGroups = new Map<string, LinkGroup>();
-  for (const e of rawEdges) {
-    if (e.type !== 'reference') continue;
-    const tarFile = fileOf(e.tar);
-    const tarSym = expandedNodes.has(tarFile) && nodeIdSet.has(e.tar) ? e.tar : null;
-    const tar = tarSym ?? tarFile;
-    if (e.src === tar) continue;
-    if (!nodeIdSet.has(e.src) || !nodeIdSet.has(tar)) continue;
-    addToGroup(referenceGroups, e.src, tar, 'reference', e.status);
-  }
-  flushGroups(referenceGroups);
 
   // Degree map for charge scaling (read before D3 mutates source/target to objects)
   const degreeMap = new Map<string, number>();
@@ -437,16 +357,14 @@ function moveTooltip(e: MouseEvent) {
 
 function showLinkTooltip(event: MouseEvent, d: any) {
   const count: number = d.count ?? 1;
-  const statuses: string[] = d.statuses ?? (d.status && d.status !== 'unchanged' ? [d.status] : ['unchanged']);
+  const s = d.status && d.status !== 'unchanged' ? d.status : null;
+  const col = s ? STATUS_COLOR[s] : '#7d8590';
+  const badge = ' <span style="color:' + col + ';font-weight:700">[' + (s ?? 'unchanged') + ']</span>';
   const srcLabel = d.source?.label ?? shortLabel(d.source?.id ?? d.source);
   const tarLabel = d.target?.label ?? shortLabel(d.target?.id ?? d.target);
   const header = d.type + (count > 1 ? ' ×' + count : '');
-  const statusHtml = statuses.map(s => {
-    const col = s !== 'unchanged' ? STATUS_COLOR[s] : '#7d8590';
-    return '<span style="color:' + col + ';font-weight:700">' + s + '</span>';
-  }).join(', ');
   tooltip.innerHTML = '<strong>' + header + '</strong><span class="meta">' +
-    srcLabel + ' &rarr; ' + tarLabel + '<br>' + statusHtml + '</span>';
+    srcLabel + ' &rarr; ' + tarLabel + badge + '</span>';
   tooltip.classList.add('visible');
   moveTooltip(event);
 }

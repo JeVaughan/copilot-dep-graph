@@ -20,6 +20,9 @@ export interface GraphEdge {
   tar: string;
   type: string;
   status?: string | null;
+  // Number of underlying relationships this edge represents. Always 1 from parsePr —
+  // aggregate.mts is what collapses several raw edges into one with count > 1.
+  count: number;
 }
 
 export interface GraphData {
@@ -179,7 +182,7 @@ export function parsePr({ repoPath, prRef = "FETCH_HEAD", baseRef = "HEAD", excl
         const key = `${src}->${tar}:${type}`;
         if (seenLinks.has(key)) return;
         seenLinks.add(key);
-        edges.push({ src, tar, type, status });
+        edges.push({ src, tar, type, status, count: 1 });
     }
 
     // Resolve a Go import path to a PR file path via suffix matching (Go files only)
@@ -296,7 +299,7 @@ export function parsePr({ repoPath, prRef = "FETCH_HEAD", baseRef = "HEAD", excl
                         const key = `${srcSymId}->${tgtFileId}:::${callee}:call`;
                         if (seenLinks.has(key)) continue;
                         seenLinks.add(key);
-                        edges.push({ src: srcSymId, tar: `${tgtFileId}:::${callee}`, type: 'call', status: edgeStatus });
+                        edges.push({ src: srcSymId, tar: `${tgtFileId}:::${callee}`, type: 'call', status: edgeStatus, count: 1 });
                     }
                 }
             }
@@ -315,7 +318,7 @@ export function parsePr({ repoPath, prRef = "FETCH_HEAD", baseRef = "HEAD", excl
                     const key = `${srcFileId}->${tgtFileId}:::${name}:reference`;
                     if (seenLinks.has(key)) continue;
                     seenLinks.add(key);
-                    edges.push({ src: srcFileId, tar: `${tgtFileId}:::${name}`, type: 'reference', status: null });
+                    edges.push({ src: srcFileId, tar: `${tgtFileId}:::${name}`, type: 'reference', status: null, count: 1 });
                 }
             }
         }

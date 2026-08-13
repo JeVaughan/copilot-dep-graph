@@ -34,6 +34,12 @@ function renderClientJs(graphData: GraphData | undefined): string {
     return tpl.replace('__GRAPH_DATA__', dataJson);
 }
 
+// graph-client.js is loaded as a module and imports this directly (relative to its
+// own URL), so it must be served alongside it.
+function readAggregateJs(): string {
+    return readFileSync(join(__dirname, 'aggregate.mjs'), 'utf8');
+}
+
 export interface StartViewerOptions {
   // Fixed port to bind to. Omit (or pass 0) for an OS-assigned ephemeral
   // port — the safe default when multiple viewers might run concurrently.
@@ -56,6 +62,11 @@ export function startViewer(initialGraph?: GraphData, options?: StartViewerOptio
             if (url.pathname === "/graph-client.js") {
                 res.setHeader("Content-Type", "application/javascript");
                 res.end(renderClientJs(graphData));
+                return;
+            }
+            if (url.pathname === "/aggregate.mjs") {
+                res.setHeader("Content-Type", "application/javascript");
+                res.end(readAggregateJs());
                 return;
             }
             if (url.pathname === "/events") {

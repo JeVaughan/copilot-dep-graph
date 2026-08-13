@@ -69,10 +69,15 @@ interface GraphEdge {
   tar: string;         // target node id
   type: string;        // "import" | "call" | "reference" | "sibling"
   status?: string | null;
+  count: number;        // always 1 from parsePr; > 1 only after aggregate.mts collapses several edges into one
 }
 ```
 
 A symbol is just a node like any other, flattened alongside its file rather than nested inside it — `parent` is what ties it back to its containing file. There's still no separate field for a file's full repo path or a symbol's source-line signature; those are dropped for now rather than carried as opaque payload.
+
+### Collapsing edges (`src/aggregate.mts`)
+
+The viewer collapses a file's symbols into the file node itself when it isn't expanded. `aggregate.mts` (pure, dependency-free, tested independently of the DOM) decides which nodes are visible for a given expand state and re-resolves every edge against that — several raw edges landing on the same visible `(src, tar)` pair, regardless of their original `type`, merge into a single `GraphEdge` with `count` set to the total and `type`/`status` each collapsed to one representative value. It's imported directly by `graph-client.ts` (served as `/aggregate.mjs` alongside `/graph-client.js`, both loaded as real ES modules) so the browser and the test suite run the exact same logic — no separate, hand-verified copy.
 
 ### Embedding in a host tool
 
@@ -83,7 +88,7 @@ If you're wiring this into something like a GitHub Copilot CLI canvas extension,
 | Action | Result |
 |--------|--------|
 | Double-click file node | Expand/collapse changed symbols |
-| Hover a reference | Shows its type (import / call / reference / sibling), endpoints, and status — collapsing a file aggregates every underlying reference between two visible nodes into one line. The line's status is the merged result (`unchanged` mixed with a real status just becomes that status; two or more *different* real statuses become `modified`), and the tooltip shows a count plus every distinct status that went into it |
+| Hover a reference | Shows its type, endpoints, and status — collapsing a file aggregates every underlying reference between two visible nodes into one line, regardless of the original type (a `call` and a `reference` edge landing on the same pair merge into one). Status is the merged result (`unchanged` mixed with a real status just becomes that status; two or more *different* real statuses become `modified`), type similarly picks one representative (`call` > `reference` > `import` > `sibling`), and the tooltip shows the total count merged in |
 | Drag node | Re-position (layout re-stabilises) |
 | Scroll | Zoom in/out |
 | Click background + drag | Pan |
@@ -132,13 +137,15 @@ dep-graph-core/
 │   ├── treesitter.test.mts
 │   ├── viewer.mts         # Local HTTP/SSE server serving the D3 UI
 │   ├── viewer.test.mts
-│   └── graph-client.ts    # Browser-side D3 force graph renderer
+│   ├── aggregate.mts      # Pure edge-collapsing logic, shared by graph-client.ts and its tests
+│   ├── aggregate.test.mts
+│   └── graph-client.ts    # Browser-side D3 force graph renderer (real ES module)
 ├── dev/serve.mts         # Manual dev harness (not published)
-├── graph.html            # D3 force graph UI shell (loads /graph-client.js)
+├── graph.html            # D3 force graph UI shell (loads /graph-client.js as a module)
 ├── d3.min.js             # Bundled D3 v7 (no CDN)
 ├── package.json
 ├── tsconfig.json          # Compiles src/*.mts → dist/ (Node ESM library)
-└── tsconfig.browser.json  # Compiles src/graph-client.ts → dist/ (browser script)
+└── tsconfig.browser.json  # Compiles src/graph-client.ts (+ aggregate.mts) → dist/ (browser ESM)
 ```
 
 `dist/` and `node_modules/` are gitignored — they're produced by `npm run build` (or automatically via `prepare` when installed as a dependency).
