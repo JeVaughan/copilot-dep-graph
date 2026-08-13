@@ -269,13 +269,14 @@ function render() {
     .selectAll('line').data(allLinks).join('line')
     .attr('class', (d: any) => {
       const st = d.status && d.status !== 'unchanged' ? ' ' + d.status : '';
-      return 'link ' + d._linkType + st;
+      return 'link' + st;
     })
     .attr('marker-end', (d: any) => {
-      if (d._linkType === 'import' || d._linkType === 'sibling') return null;
       const s = d.status && d.status !== 'unchanged' ? d.status : null;
       return s ? 'url(#arrow-' + s + ')' : 'url(#arrow)';
-    });
+    })
+    .on('mouseenter', (e: any, d: any) => showLinkTooltip(e, d))
+    .on('mouseleave', () => tooltip.classList.remove('visible'));
 
   root.selectAll('.node, .symbol-node').remove();
   nodeSel = root.append('g').attr('class', 'nodes')
@@ -375,6 +376,19 @@ function moveTooltip(e: MouseEvent) {
   let x = e.clientX - wrap.left + 12, y = e.clientY - wrap.top + 12;
   if (x + 310 > wrap.width) x -= 320;
   tooltip.style.left = x + 'px'; tooltip.style.top = y + 'px';
+}
+
+const LINK_TYPE_LABEL: Record<string, string> = { import: 'import', call: 'call', sibling: 'sibling (same component)' };
+function showLinkTooltip(event: MouseEvent, d: any) {
+  const s = d.status && d.status !== 'unchanged' ? d.status : null;
+  const col = s ? STATUS_COLOR[s] : '';
+  const badge = s ? ' <span style="color:' + col + ';font-weight:700">[' + s + ']</span>' : '';
+  const srcLabel = shortLabel(d.source?.label ?? d.source?.id ?? d.source);
+  const tgtLabel = shortLabel(d.target?.label ?? d.target?.id ?? d.target);
+  tooltip.innerHTML = '<strong>' + (LINK_TYPE_LABEL[d._linkType] ?? d._linkType) + '</strong><span class="meta">' +
+    srcLabel + ' &rarr; ' + tgtLabel + badge + '</span>';
+  tooltip.classList.add('visible');
+  moveTooltip(event);
 }
 svg.node().addEventListener('mousemove', (e: MouseEvent) => { if (tooltip.classList.contains('visible')) moveTooltip(e); });
 

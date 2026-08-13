@@ -60,6 +60,7 @@ If you're wiring this into something like a GitHub Copilot CLI canvas extension,
 | Action | Result |
 |--------|--------|
 | Double-click file node | Expand/collapse changed symbols |
+| Hover edge | Shows its type (import / call / sibling), endpoints, and status |
 | Drag node | Re-position (layout re-stabilises) |
 | Scroll | Zoom in/out |
 | Click background + drag | Pan |
@@ -74,13 +75,14 @@ If you're wiring this into something like a GitHub Copilot CLI canvas extension,
 
 ## Edge colours
 
+Edge type (import / call / sibling) is not shown as a distinct line style — hover an edge to see it. Colour is status only:
+
 | Colour | Meaning |
 |--------|---------|
 | Green | Added |
 | Yellow | Modified |
 | Red | Removed |
 | Grey | Unchanged |
-| Faint dotted | Sibling (structural, same component) |
 
 ## Supported languages
 

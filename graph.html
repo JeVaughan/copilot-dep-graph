@@ -19,17 +19,11 @@
     button:hover { background: var(--background-color-emphasis, #21262d); }
     #canvas-wrap { flex: 1; position: relative; overflow: hidden; }
     svg { width: 100%; height: 100%; display: block; }
-    .link { stroke: #8b949e; stroke-opacity: 0.45; stroke-width: 1.2; }
-    /* call links: solid, coloured by source file status */
-    .link.call     { stroke: #8b949e; stroke-opacity: 0.45; stroke-width: 1.2; }
-    /* import links: thin dashed, lower visual weight */
-    .link.import   { stroke: #484f58; stroke-opacity: 0.45; stroke-width: 0.8; stroke-dasharray: 4,3; }
-    /* sibling links: very faint dotted — only structural, no semantic */
-    .link.sibling  { stroke: #484f58; stroke-opacity: 0.20; stroke-width: 0.6; stroke-dasharray: 2,5; marker-end: none; }
-    /* status overrides — must come after type rules (same specificity, cascade order) */
-    .link.call.added,   .link.import.added    { stroke: #56d364; stroke-opacity: 0.35; }
-    .link.call.modified,.link.import.modified { stroke: #e3b341; stroke-opacity: 0.35; }
-    .link.call.removed, .link.import.removed  { stroke: #f85149; stroke-opacity: 0.30; stroke-dasharray: 5,3; }
+    /* Edge type (import / call / sibling) is not shown visually — hover an edge for that. */
+    .link { stroke: #8b949e; stroke-opacity: 0.45; stroke-width: 1.2; cursor: default; }
+    .link.added    { stroke: #56d364; stroke-opacity: 0.35; }
+    .link.modified { stroke: #e3b341; stroke-opacity: 0.35; }
+    .link.removed  { stroke: #f85149; stroke-opacity: 0.30; stroke-dasharray: 5,3; }
     .node circle { cursor: default; }
     .node.expandable circle { cursor: pointer; }
     .node text, .symbol-node text { fill: #e6edf3; font-size: 11px; pointer-events: none; dominant-baseline: central; }
@@ -61,8 +55,7 @@
       <span style="color:#56d364;font-weight:600">+ added</span>
       <span style="color:#e3b341;font-weight:600">~ modified</span>
       <span style="color:#f85149;font-weight:600">- removed</span>
-      <span style="color:#8b949e">&#9135; call</span>
-      <span style="color:#484f58">&#183;&#183; import</span>
+      <span>hover an edge for its type</span>
       <span style="color:#adbac7">&#9650; fn/method</span>
       <span style="color:#adbac7">&#9632; class/type</span>
       <span style="color:#adbac7">&#9679; prop/const</span>
