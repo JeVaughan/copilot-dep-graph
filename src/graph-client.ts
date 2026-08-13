@@ -278,6 +278,20 @@ function render() {
   nodeSel.filter((d: any) => d._type === 'file' && !d._expanded).append('circle')
     .attr('r', 10).attr('fill', (d: any) => nodeColor(d)).attr('stroke', 'none');
 
+  // "+N" badge for symbols not currently shown — lives inside the file's own <g> (not
+  // the labels group), so it moves with the node without needing its own tick tracking.
+  nodeSel.filter((d: any) => d._type === 'file' && hiddenCount(d.id) > 0).each(function (this: any, d: any) {
+    const g = d3.select(this);
+    const hidden = hiddenCount(d.id);
+    const r = d._expanded ? 4 : 10;
+    const cx = r * 0.7, cy = r * 0.7;
+    g.append('circle').attr('cx', cx).attr('cy', cy).attr('r', 7)
+      .attr('fill', '#30363d').attr('stroke', '#7d8590').attr('stroke-width', 1);
+    g.append('text').attr('x', cx).attr('y', cy).attr('text-anchor', 'middle')
+      .style('font-size', '9px').style('fill', '#adbac7').style('pointer-events', 'none').style('dominant-baseline', 'central')
+      .text('+' + hidden);
+  });
+
   nodeSel.filter((d: any) => d._type === 'symbol').each(function (this: any, d: any) {
     const g = d3.select(this);
     const col = symColor(d);
@@ -301,12 +315,7 @@ function render() {
     .selectAll('text').data(allNodes).join('text')
     .attr('class', (d: any) => 'label ' + (d._type === 'symbol' ? 'symbol' : 'file'))
     .attr('x', 0).attr('y', -14).attr('text-anchor', 'middle')
-    .text((d: any) => {
-      const label = d.label ?? shortLabel(d.id);
-      if (d._type !== 'file') return label;
-      const hidden = hiddenCount(d.id);
-      return hidden > 0 ? label + ' (+' + hidden + ')' : label;
-    });
+    .text((d: any) => d.label ?? shortLabel(d.id));
 
   simulation.on('tick', () => {
     linkSel.attr('x1', (d: any) => d.source.x).attr('y1', (d: any) => d.source.y)
