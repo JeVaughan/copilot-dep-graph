@@ -20,9 +20,9 @@
     #canvas-wrap { flex: 1; position: relative; overflow: hidden; }
     svg { width: 100%; height: 100%; display: block; }
     /* Edge type (import / call / sibling) is not shown visually — hover an edge for that.
-       Status colour/opacity/dasharray is set in JS (graph-client.ts), not here, so there's
+       Status colour/opacity/width is set in JS (graph-client.ts), not here, so there's
        one source of truth shared with node fills and the legend below. */
-    .link { stroke-width: 1.2; cursor: default; }
+    .link { cursor: default; }
     .node circle, .symbol-node circle, .symbol-node rect, .symbol-node polygon { cursor: default; }
     .expandable circle, .expandable rect, .expandable polygon { cursor: pointer; }
     .label { pointer-events: none; dominant-baseline: central; }
@@ -39,6 +39,10 @@
     #empty { display: none; position: absolute; inset: 0; align-items: center; justify-content: center;
       color: #7d8590; padding: 1rem; text-align: center; }
     #empty.show { display: flex; }
+    #stats { position: absolute; right: 12px; bottom: 12px; pointer-events: none;
+      background: var(--background-color-subtle, #161b22);
+      border: 1px solid var(--border-color-default, #30363d);
+      border-radius: 6px; padding: 6px 10px; font-size: 11px; color: #7d8590; }
     #app { display: flex; flex-direction: column; height: 100vh; }
   </style>
 </head>
@@ -61,6 +65,7 @@
   <div id="canvas-wrap">
     <svg id="svg"><g id="root"></g></svg>
     <div id="tooltip"></div>
+    <div id="stats"></div>
     <div id="empty" class="show"><span id="empty-msg">No graph loaded.</span></div>
   </div>
 </div>

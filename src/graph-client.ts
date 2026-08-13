@@ -119,12 +119,35 @@ function fadeStopOffsets(d: any): [number, number] {
   return [frac, 1 - frac];
 }
 
+// A file's collision radius before any depth scaling (a file is always depth 0, so
+// this is also its actual radius). Every node's collision radius is this same base
+// times depthScale(its own depth)² — no separate file/symbol formula. Squared because
+// collision radius is a pure distance, not a glyph dimension: a glyph's felt "size" is
+// its area (radius²), so a distance meant to track that felt size needs the same square.
+const COLLISION_BASE_RADIUS = 48;
+
+// Edge stroke-width as a function of how many raw edges it represents — rises with
+// count but asymptotes rather than growing without bound, so one wildly-aggregated
+// link can't visually swamp the graph. LINK_WIDTH_LIMIT (COLLISION_BASE_RADIUS / 3)
+// is the width it approaches as count → ∞; LINK_WIDTH_HALF_COUNT is the count at
+// which it's already at half that limit — a standard saturating (Michaelis-Menten
+// shaped) curve, chosen so count 1 lands close to the old flat 1.2px default.
+const LINK_WIDTH_LIMIT = COLLISION_BASE_RADIUS / 3;
+const LINK_WIDTH_HALF_COUNT = 11;
+function linkWidth(count: number): number {
+  return LINK_WIDTH_LIMIT * count / (count + LINK_WIDTH_HALF_COUNT);
+}
+
+// Link strength per unit of count — see the 'link' force below.
+const LINK_STRENGTH_PER_COUNT = 0.08;
+
 function render() {
   const { nodes: rawNodes, edges: rawEdges } = graphData;
   document.getElementById('graph-title')!.textContent = graphData.title ?? 'Dependency Graph';
   if (!rawNodes || !rawNodes.length) {
     document.getElementById('empty')!.classList.add('show');
     document.getElementById('empty-msg')!.textContent = graphData.error ?? 'No graph loaded.';
+    document.getElementById('stats')!.textContent = '';
     return;
   }
   document.getElementById('empty')!.classList.remove('show');
@@ -213,6 +236,12 @@ function render() {
     allLinks.push({ source: e.src, target: e.tar, type: e.type, status: e.status, count: e.count });
   }
 
+  // rawNodes/rawEdges are the full underlying graph; allNodes/allLinks are what's
+  // actually shown at the current expand state (a subset once anything's collapsed,
+  // and allLinks is further collapsed/aggregated on top of that — see buildLinks).
+  document.getElementById('stats')!.textContent =
+    `Nodes ${allNodes.length}/${rawNodes.length} · Edges ${allLinks.length}/${rawEdges.length}`;
+
   // Degree map for charge scaling, and each node's incident-edge statuses for its
   // border colour below — both read here before D3 mutates source/target to objects.
   const degreeMap = new Map<string, number>();
@@ -292,7 +321,12 @@ function render() {
   simulation = d3.forceSimulation(allNodes)
     .force('link', d3.forceLink(allLinks).id((d: any) => d.id)
       .distance((d: any) => d.type === 'sibling' ? 30 : d.type === 'import' ? 55 : 70)
-      .strength((d: any) => d.type === 'sibling' ? 0.5 : d.type === 'import' ? 0.02 : (d._type === 'symbol' ? 0.35 : 0.08)))
+      // Weighted by how many raw edges this rendered link represents, not by edge
+      // type — a link standing in for 5 collapsed relationships pulls 5x harder than
+      // one standing in for a single relationship. LINK_STRENGTH_PER_COUNT (0.08)
+      // matches the old default call/reference strength at count 1, so the common
+      // (uncollapsed) case is unchanged.
+      .strength((d: any) => LINK_STRENGTH_PER_COUNT * (d.count ?? 1)))
     .force('charge', d3.forceManyBody().strength((d: any) => {
       if (d._type === 'symbol') return -40;
       const deg = degreeMap.get(d.id) || 0;
@@ -355,7 +389,7 @@ function render() {
       return 'link' + st;
     })
     .attr('stroke', (_d: any, i: number) => 'url(#link-grad-' + i + ')')
-    .attr('stroke-dasharray', (d: any) => d.status === 'removed' ? '5,3' : null)
+    .attr('stroke-width', (d: any) => linkWidth(d.count ?? 1))
     .on('mouseenter', (e: any, d: any) => showLinkTooltip(e, d))
     .on('mouseleave', () => tooltip.classList.remove('visible'));
 
@@ -475,13 +509,6 @@ const CHILD_SCALE_FLOOR = 0.5;
 function depthScale(depth: number): number {
   return Math.max(CHILD_SCALE_FLOOR, Math.pow(CHILD_SCALE_STEP, depth));
 }
-
-// A file's collision radius before any depth scaling (a file is always depth 0, so
-// this is also its actual radius). Every node's collision radius is this same base
-// times depthScale(its own depth)² — no separate file/symbol formula. Squared because
-// collision radius is a pure distance, not a glyph dimension: a glyph's felt "size" is
-// its area (radius²), so a distance meant to track that felt size needs the same square.
-const COLLISION_BASE_RADIUS = 48;
 
 // A container's hull padding is HULL_BASE_PAD * depthScale(its own depth)² — squared
 // for the same reason the collision radius is — wider than a single node's own glyph
