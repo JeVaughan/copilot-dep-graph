@@ -21,8 +21,7 @@ const STATUS_OPACITY: Record<string, number> = { added: 0.35, modified: 0.35, re
 function nodeStatus(d: any): string | null { return d.status ?? null; }
 function nodeColor(d: any): string { return STATUS_COLOR[d.status ?? 'unchanged']; }
 function symColor(d: any): string {
-  const s = d.status && d.status !== 'unchanged' ? d.status : d._parentStatus;
-  return STATUS_COLOR[s && s !== 'unchanged' ? s : 'unchanged'];
+  return STATUS_COLOR[d.status ?? 'unchanged'];
 }
 function shortLabel(id: string): string { return (id ?? '').split('/').pop()!; }
 
@@ -128,7 +127,7 @@ function render() {
       for (const sym of cs) {
         const ep = posCache.get(sym.id);
         const sn = Object.assign({}, sym, {
-          _type: 'symbol', _parent: n.id, _parentStatus: n.status,
+          _type: 'symbol', _parent: n.id,
           x: (ep && ep.x) || ((parent && parent.x) || 0) + (Math.random() - 0.5) * 60,
           y: (ep && ep.y) || ((parent && parent.y) || 0) + (Math.random() - 0.5) * 60,
         });
