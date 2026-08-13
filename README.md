@@ -51,6 +51,19 @@ await viewer.close();
 
 `parsePr` has no dependency on `startViewer` — use it standalone if you just want the graph data (e.g. to render with your own UI, or serialize to JSON).
 
+### Resolving a GitHub PR number (`resolveGitHubPr`)
+
+`parsePr` takes a `prRef` — any git ref or SHA already present in the local checkout — and deliberately never fetches anything itself, so it stays usable against any git repo, not just GitHub's. If all you have is a PR *number* against a GitHub remote, use `resolveGitHubPr` to turn that into a `prRef`:
+
+```ts
+import { parsePr, resolveGitHubPr } from "dep-graph-core";
+
+const prRef = resolveGitHubPr(repoPath, 123); // fetches refs/pull/123/head, returns "FETCH_HEAD"
+const { nodes, edges } = parsePr({ repoPath, prRef });
+```
+
+This matters for PRs that were squash- or rebase-merged: after a merge like that, the PR's original commits are no longer reachable from `main` at all, so a local checkout's `HEAD` has no ancestry relationship with them. `resolveGitHubPr` fetches the PR's head commit directly via GitHub's `refs/pull/<n>/head` convention (which stays valid even after the PR is merged, until the ref is eventually garbage-collected), so `parsePr`'s merge-base logic has something real to diff against.
+
 ### Graph data shape
 
 Nodes and edges are a deliberately minimal, generic graph shape — no visualization-specific fields, so the parser and any viewer stay decoupled. The canonical definitions live in [src/types.mts](src/types.mts), which has zero imports of its own (no Node built-ins, no treesitter) specifically so it's safe to pull into the browser build without dragging anything else along — `parse.mts`, `aggregate.mts`, and `graph-client.ts` all import from there rather than each declaring their own copy:
@@ -136,6 +149,8 @@ dep-graph-core/
 │   ├── types.mts          # Shared GraphNode/GraphEdge/GraphData shape — zero imports of its own
 │   ├── parse.mts          # parsePr: git diff + tree-sitter → graph data
 │   ├── parse.test.mts     # node:test suite for parse.mts, runs against the built dist/
+│   ├── github.mts         # resolveGitHubPr: GitHub PR number → prRef (fetch, refs/pull/<n>/head)
+│   ├── github.test.mts
 │   ├── treesitter.mts     # AST extraction (TypeScript + Go)
 │   ├── treesitter.test.mts
 │   ├── viewer.mts         # Local HTTP/SSE server serving the D3 UI
