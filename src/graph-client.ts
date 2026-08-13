@@ -161,21 +161,46 @@ function render() {
   // ── Build effective link set ─────────────────────────────────────────────
   const nodeIdSet = new Set(allNodes.map(n => n.id));
 
-  // Import links: always file→file, never follow expansion
-  for (const e of rawEdges) {
-    if (e.type !== 'import') continue;
-    if (nodeIdSet.has(e.src) && nodeIdSet.has(e.tar)) allLinks.push({ source: e.src, target: e.tar, type: e.type, status: e.status });
+  // A group accumulates every raw edge collapsing onto the same rendered (src, tar) pair:
+  // count is the total, statuses is the distinct set of statuses among them (normalized,
+  // null/"unchanged" → "unchanged"), and status is the first-seen one (used for line colour).
+  interface LinkGroup { source: string; target: string; type: string; status: string | null; count: number; statuses: Set<string>; }
+  function addToGroup(groups: Map<string, LinkGroup>, source: string, target: string, type: string, status: string | null | undefined) {
+    const key = source + '->' + target;
+    let group = groups.get(key);
+    if (!group) {
+      group = { source, target, type, status: status ?? null, count: 0, statuses: new Set() };
+      groups.set(key, group);
+    }
+    group.count++;
+    group.statuses.add(status && status !== 'unchanged' ? status : 'unchanged');
+  }
+  function flushGroups(groups: Map<string, LinkGroup>) {
+    for (const g of groups.values()) {
+      allLinks.push({ source: g.source, target: g.target, type: g.type, status: g.status, count: g.count, statuses: [...g.statuses] });
+    }
   }
 
+  // Import links: always file→file, never follow expansion
+  const importGroups = new Map<string, LinkGroup>();
+  for (const e of rawEdges) {
+    if (e.type !== 'import') continue;
+    if (nodeIdSet.has(e.src) && nodeIdSet.has(e.tar)) addToGroup(importGroups, e.src, e.tar, 'import', e.status);
+  }
+  flushGroups(importGroups);
+
   // Sibling links: structural connectors between co-located component files (.ts/.html/.scss)
+  const siblingGroups = new Map<string, LinkGroup>();
   for (const e of rawEdges) {
     if (e.type !== 'sibling') continue;
-    if (nodeIdSet.has(e.src) && nodeIdSet.has(e.tar)) allLinks.push({ source: e.src, target: e.tar, type: e.type, status: e.status });
+    if (nodeIdSet.has(e.src) && nodeIdSet.has(e.tar)) addToGroup(siblingGroups, e.src, e.tar, 'sibling', e.status);
   }
+  flushGroups(siblingGroups);
+
   //   neither expanded:    fileA → fileB
   //   source expanded:     sym → fileB  (falls back to fileA if sym not shown)
   //   both expanded:       sym → sym    (falls back to file if either sym not shown)
-  const callLinkKeys = new Set<string>();
+  const callGroups = new Map<string, LinkGroup>();
   for (const e of rawEdges) {
     if (e.type !== 'call') continue;
     const srcFile = fileOf(e.src), tarFile = fileOf(e.tar);
@@ -186,20 +211,18 @@ function render() {
     const tar = tarSym ?? tarFile;
     if (src === tar) continue;
     if (!nodeIdSet.has(src) || !nodeIdSet.has(tar)) continue;
-    const key = src + '->' + tar;
-    if (callLinkKeys.has(key)) continue;
-    callLinkKeys.add(key);
     // Symbol-level status takes priority; fall back to file status for unchanged symbols
     const srcFileNode = nodeById.get(srcFile);
     const tarFileNode = nodeById.get(tarFile);
     const callStatus = (e.status && e.status !== 'unchanged') ? e.status
                      : srcFileNode?.status ?? tarFileNode?.status ?? null;
-    allLinks.push({ source: src, target: tar, type: 'call', status: callStatus });
+    addToGroup(callGroups, src, tar, 'call', callStatus);
   }
+  flushGroups(callGroups);
 
   // Reference links: file → named symbol it uses but that couldn't be attributed to a
   // specific calling symbol (e.g. used only in a type position). Source is always a file.
-  const referenceLinkKeys = new Set<string>();
+  const referenceGroups = new Map<string, LinkGroup>();
   for (const e of rawEdges) {
     if (e.type !== 'reference') continue;
     const tarFile = fileOf(e.tar);
@@ -207,11 +230,9 @@ function render() {
     const tar = tarSym ?? tarFile;
     if (e.src === tar) continue;
     if (!nodeIdSet.has(e.src) || !nodeIdSet.has(tar)) continue;
-    const key = e.src + '->' + tar;
-    if (referenceLinkKeys.has(key)) continue;
-    referenceLinkKeys.add(key);
-    allLinks.push({ source: e.src, target: tar, type: 'reference', status: e.status });
+    addToGroup(referenceGroups, e.src, tar, 'reference', e.status);
   }
+  flushGroups(referenceGroups);
 
   // Degree map for charge scaling (read before D3 mutates source/target to objects)
   const degreeMap = new Map<string, number>();
@@ -406,13 +427,17 @@ function moveTooltip(e: MouseEvent) {
 }
 
 function showLinkTooltip(event: MouseEvent, d: any) {
-  const s = d.status && d.status !== 'unchanged' ? d.status : null;
-  const col = s ? STATUS_COLOR[s] : '';
-  const badge = s ? ' <span style="color:' + col + ';font-weight:700">[' + s + ']</span>' : '';
+  const count: number = d.count ?? 1;
+  const statuses: string[] = d.statuses ?? (d.status && d.status !== 'unchanged' ? [d.status] : ['unchanged']);
   const srcLabel = d.source?.label ?? shortLabel(d.source?.id ?? d.source);
   const tarLabel = d.target?.label ?? shortLabel(d.target?.id ?? d.target);
-  tooltip.innerHTML = '<strong>' + d.type + '</strong><span class="meta">' +
-    srcLabel + ' &rarr; ' + tarLabel + badge + '</span>';
+  const header = d.type + (count > 1 ? ' ×' + count : '');
+  const statusHtml = statuses.map(s => {
+    const col = s !== 'unchanged' ? STATUS_COLOR[s] : '#7d8590';
+    return '<span style="color:' + col + ';font-weight:700">' + s + '</span>';
+  }).join(', ');
+  tooltip.innerHTML = '<strong>' + header + '</strong><span class="meta">' +
+    srcLabel + ' &rarr; ' + tarLabel + '<br>' + statusHtml + '</span>';
   tooltip.classList.add('visible');
   moveTooltip(event);
 }
