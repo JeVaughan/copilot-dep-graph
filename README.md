@@ -57,7 +57,8 @@ Nodes and edges are a deliberately minimal, generic graph shape — no visualiza
 
 ```ts
 interface GraphNode {
-  id: string;        // e.g. "src/foo.ts" (file) or "src/foo.ts:::bar" (symbol)
+  id: string;         // e.g. "src/foo.ts" (file) or "src/foo.ts:::bar" (symbol)
+  label: string;      // display name, e.g. "foo.ts" or "bar" — id without the file-prefix/"::: " plumbing
   type: string;       // "file" for file nodes, or a symbol kind: function/method/class/interface/type/enum/property/const
   parent?: string;    // for symbol nodes, the id of their containing file
   status?: string;    // "added" | "modified" | "removed" | "unchanged"
@@ -71,7 +72,7 @@ interface GraphEdge {
 }
 ```
 
-A symbol is just a node like any other, flattened alongside its file rather than nested inside it — `parent` is what ties it back to its containing file. There's no separate field for a display label or file path; both are recoverable from `id`.
+A symbol is just a node like any other, flattened alongside its file rather than nested inside it — `parent` is what ties it back to its containing file. There's still no separate field for a file's full repo path or a symbol's source-line signature; those are dropped for now rather than carried as opaque payload.
 
 ### Embedding in a host tool
 

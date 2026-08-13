@@ -13,6 +13,7 @@ declare const __GRAPH_DATA__: GraphData;
 // (function/method/class/...) for symbol nodes.
 interface GraphNode {
   id: string;
+  label: string;
   type: string;
   parent?: string;
   status?: string;
@@ -278,8 +279,10 @@ function render() {
       .style('stroke-width', '1.5').style('pointer-events', 'none'));
   }
 
-  root.selectAll('.link, .link-label-g').remove();
-  linkSel = root.insert('g', '.nodes').attr('class', 'links')
+  // Remove stale wrapper groups (not just their contents) and recreate them
+  // links-then-nodes, so nodes always paint on top of edges.
+  root.selectAll('.links').remove();
+  linkSel = root.append('g').attr('class', 'links')
     .selectAll('line').data(allLinks).join('line')
     .attr('class', (d: any) => {
       const st = d.status && d.status !== 'unchanged' ? ' ' + d.status : '';
@@ -292,7 +295,7 @@ function render() {
     .on('mouseenter', (e: any, d: any) => showLinkTooltip(e, d))
     .on('mouseleave', () => tooltip.classList.remove('visible'));
 
-  root.selectAll('.node, .symbol-node').remove();
+  root.selectAll('.nodes').remove();
   nodeSel = root.append('g').attr('class', 'nodes')
     .selectAll('g').data(allNodes).join('g')
     .attr('class', (d: any) => (d._type === 'symbol' ? 'symbol-node' : 'node') + (expandable(d) ? ' expandable' : ''))
@@ -305,11 +308,11 @@ function render() {
     .on('mouseleave', () => tooltip.classList.remove('visible'));
 
   nodeSel.filter((d: any) => d._type === 'file' && d._expanded).append('circle')
-    .attr('r', 4).attr('fill', (d: any) => nodeColor(d)).attr('fill-opacity', 0.5).attr('stroke', 'none');
+    .attr('r', 4).attr('fill', (d: any) => nodeColor(d)).attr('stroke', 'none');
 
   nodeSel.filter((d: any) => d._type === 'file' && !d._expanded).append('circle')
     .attr('r', 10).attr('fill', (d: any) => nodeColor(d))
-    .attr('stroke', 'rgba(255,255,255,0.15)').attr('stroke-width', 1.5);
+    .attr('stroke', '#fff').attr('stroke-width', 1.5);
 
   nodeSel.filter((d: any) => d._type === 'symbol').each(function (this: any, d: any) {
     const g = d3.select(this);
@@ -317,13 +320,13 @@ function render() {
     const sh = symShape(d);
     if (sh === 'triangle') {
       g.append('polygon').attr('points', '0,-8 7,5 -7,5')
-        .attr('fill', col).attr('stroke', col).attr('stroke-opacity', 0.5).attr('stroke-width', 1).attr('opacity', 0.85);
+        .attr('fill', col).attr('stroke', col).attr('stroke-width', 1);
     } else if (sh === 'square') {
       g.append('rect').attr('x', -6).attr('y', -6).attr('width', 12).attr('height', 12).attr('rx', 1)
-        .attr('fill', col).attr('stroke', col).attr('stroke-opacity', 0.5).attr('stroke-width', 1).attr('opacity', 0.85);
+        .attr('fill', col).attr('stroke', col).attr('stroke-width', 1);
     } else {
       g.append('circle').attr('r', 7)
-        .attr('fill', col).attr('stroke', col).attr('stroke-opacity', 0.5).attr('stroke-width', 1).attr('opacity', 0.85);
+        .attr('fill', col).attr('stroke', col).attr('stroke-width', 1);
     }
   });
 
@@ -332,11 +335,11 @@ function render() {
     .attr('y', (d: any) => d._expanded ? -14 : 0)
     .attr('text-anchor', (d: any) => d._expanded ? 'middle' : 'start')
     .attr('fill', (d: any) => d._expanded ? '#7d8590' : '#e6edf3')
-    .text((d: any) => shortLabel(d.id));
+    .text((d: any) => d.label ?? shortLabel(d.id));
 
   nodeSel.filter((d: any) => d._type === 'symbol').append('text')
     .attr('class', 'label').attr('x', 10).attr('y', 0)
-    .text((d: any) => shortLabel(d.id));
+    .text((d: any) => d.label ?? shortLabel(d.id));
 
 
   simulation.on('tick', () => {
@@ -375,7 +378,7 @@ function showTooltip(event: MouseEvent, d: any) {
   const badge = s ? ' <span style="color:' + col + ';font-weight:700">[' + s + ']</span>' : '';
   const changed = d._type === 'file' ? changedChildren(d.id) : [];
   const hint = changed.length ? '<br>double-click to ' + (expandedNodes.has(d.id) ? 'collapse' : 'expand (' + changed.length + ' changed)') : '';
-  tooltip.innerHTML = '<strong>' + shortLabel(d.id) + '</strong><span class="meta">' +
+  tooltip.innerHTML = '<strong>' + (d.label ?? shortLabel(d.id)) + '</strong><span class="meta">' +
     (d._type === 'symbol' ? (d.type || 'symbol') : 'file') + badge + hint + '</span>';
   tooltip.classList.add('visible');
   moveTooltip(event);
@@ -391,8 +394,8 @@ function showLinkTooltip(event: MouseEvent, d: any) {
   const s = d.status && d.status !== 'unchanged' ? d.status : null;
   const col = s ? STATUS_COLOR[s] : '';
   const badge = s ? ' <span style="color:' + col + ';font-weight:700">[' + s + ']</span>' : '';
-  const srcLabel = shortLabel(d.source?.id ?? d.source);
-  const tarLabel = shortLabel(d.target?.id ?? d.target);
+  const srcLabel = d.source?.label ?? shortLabel(d.source?.id ?? d.source);
+  const tarLabel = d.target?.label ?? shortLabel(d.target?.id ?? d.target);
   tooltip.innerHTML = '<strong>' + d.type + '</strong><span class="meta">' +
     srcLabel + ' &rarr; ' + tarLabel + badge + '</span>';
   tooltip.classList.add('visible');

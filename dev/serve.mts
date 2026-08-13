@@ -41,11 +41,11 @@ if (repoPath) {
   graph = {
     title: "Sample Graph",
     nodes: [
-      { id: "a.ts", type: "file", status: "added" },
-      { id: "a.ts:::helper", type: "function", parent: "a.ts", status: "added" },
-      { id: "b.ts", type: "file", status: "modified" },
-      { id: "b.ts:::doStuff", type: "function", parent: "b.ts", status: "added" },
-      { id: "c.ts", type: "file", status: "removed" },
+      { id: "a.ts", label: "a.ts", type: "file", status: "added" },
+      { id: "a.ts:::helper", label: "helper", type: "function", parent: "a.ts", status: "added" },
+      { id: "b.ts", label: "b.ts", type: "file", status: "modified" },
+      { id: "b.ts:::doStuff", label: "doStuff", type: "function", parent: "b.ts", status: "added" },
+      { id: "c.ts", label: "c.ts", type: "file", status: "removed" },
     ],
     edges: [
       { src: "a.ts", tar: "b.ts", status: "added", type: "import" },

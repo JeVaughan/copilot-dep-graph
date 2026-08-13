@@ -9,6 +9,7 @@ import { initParsers, parseSource, isAvailable, type Symbol as ParsedSymbol } fr
 // `type` is "file" for file nodes, or the symbol kind (function/method/class/...) for symbol nodes.
 export interface GraphNode {
   id: string;
+  label: string;
   type: string;
   parent?: string;
   status?: string;
@@ -163,9 +164,9 @@ export function parsePr({ repoPath, prRef = "FETCH_HEAD", baseRef = "HEAD", excl
         }
 
         fileSymbols.set(filePath, symbols);
-        nodes.push({ id: fileId, type: "file", status });
+        nodes.push({ id: fileId, label: fileId.split('/').pop()!, type: "file", status });
         for (const sym of symbols) {
-            nodes.push({ id: `${fileId}:::${sym.name}`, type: sym.kind, parent: fileId, status: sym.status });
+            nodes.push({ id: `${fileId}:::${sym.name}`, label: sym.name, type: sym.kind, parent: fileId, status: sym.status });
         }
     }
 

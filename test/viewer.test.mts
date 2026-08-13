@@ -6,8 +6,8 @@ test("startViewer serves the graph UI, data, and static assets", async () => {
   const viewer = await startViewer({
     title: "Test Graph",
     nodes: [
-      { id: "a.ts", type: "file", status: "added" },
-      { id: "b.ts", type: "file", status: "modified" },
+      { id: "a.ts", label: "a.ts", type: "file", status: "added" },
+      { id: "b.ts", label: "b.ts", type: "file", status: "modified" },
     ],
     edges: [{ src: "a.ts", tar: "b.ts", status: "added", type: "import" }],
   });
