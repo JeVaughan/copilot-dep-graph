@@ -19,7 +19,7 @@ function primaryType(types: Set<string>): string {
 // "unchanged" never dilutes a real status (it carries no signal of its own). Two or more
 // *different* real statuses (e.g. some added, some removed) collapse to "modified" — the
 // only one of the four that doesn't make a false claim about the direction of change.
-function aggregateStatus(statuses: Set<string>): string | null {
+export function aggregateStatus(statuses: Set<string>): string | null {
   const real = [...statuses].filter(s => s !== "unchanged");
   if (real.length === 0) return null;
   if (real.length === 1) return real[0];

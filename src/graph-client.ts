@@ -4,7 +4,7 @@
 // share aggregate.mts's collapsing logic with the Node-side tests, rather than
 // duplicating it.
 
-import { buildLinks, visibleChildren, nextExpandLevel } from "./aggregate.mjs";
+import { buildLinks, visibleChildren, nextExpandLevel, aggregateStatus } from "./aggregate.mjs";
 import type { GraphNode, GraphData } from "./types.mjs";
 
 declare const d3: any;
@@ -14,8 +14,8 @@ declare const __GRAPH_DATA__: GraphData;
 
 // Single source of truth for every status colour and opacity in the UI — "unchanged"
 // is just another status here, not a separate fallback constant. Node fill, symbol
-// fill, tooltip badges, arrow markers, link strokes, hull layer, and the toolbar
-// legend (wired up at the bottom of this file) all derive from these.
+// fill, tooltip badges, link strokes, hull layer, and the toolbar legend (wired up at
+// the bottom of this file) all derive from these.
 const STATUS_COLOR: Record<string, string> = { added: '#56d364', modified: '#e3b341', removed: '#f85149', unchanged: '#8b949e' };
 const STATUS_OPACITY: Record<string, number> = { added: 0.35, modified: 0.35, removed: 0.30, unchanged: 0.45 };
 function nodeStatus(d: any): string | null { return d.status ?? null; }
@@ -93,19 +93,6 @@ const root = d3.select('#root');
 const zoom = d3.zoom().scaleExtent([0.1, 8]).on('zoom', (e: any) => root.attr('transform', e.transform));
 svg.call(zoom).on('dblclick.zoom', null);
 const defs = svg.append('defs');
-// Opacity matches the corresponding link's stroke-opacity (set alongside .attr('stroke', ...)
-// in render() below), so an arrowhead doesn't look like a solid, opaque cap on a faint line.
-[
-  { id: 'arrow', color: STATUS_COLOR.unchanged, opacity: STATUS_OPACITY.unchanged },
-  { id: 'arrow-added', color: STATUS_COLOR.added, opacity: STATUS_OPACITY.added },
-  { id: 'arrow-modified', color: STATUS_COLOR.modified, opacity: STATUS_OPACITY.modified },
-  { id: 'arrow-removed', color: STATUS_COLOR.removed, opacity: STATUS_OPACITY.removed },
-].forEach(({ id, color, opacity }) => {
-  defs.append('marker')
-    .attr('id', id).attr('viewBox', '0 -4 8 8')
-    .attr('refX', 18).attr('refY', 0).attr('markerWidth', 4).attr('markerHeight', 4).attr('orient', 'auto')
-    .append('path').attr('d', 'M0,-4L8,0L0,4').attr('fill', color).attr('fill-opacity', opacity);
-});
 
 // Toolbar legend colours, from the same STATUS_COLOR map — see graph.html for the markup.
 (['added', 'modified', 'removed'] as const).forEach(status => {
@@ -113,7 +100,24 @@ const defs = svg.append('defs');
   if (el) el.style.color = STATUS_COLOR[status];
 });
 
-let linkSel: any, nodeSel: any, labelSel: any;
+let linkSel: any, nodeSel: any, labelSel: any, gradientSel: any;
+
+// A link's midpoint opacity as a fraction of its peak (source/target-end) opacity —
+// each edge fades from both ends toward a faded middle instead of a flat
+// stroke-opacity, so long lines crossing the canvas read as anchored at their nodes
+// without adding clutter along the way.
+const LINK_MID_FADE = 0.2;
+// The fade ramp near each end is a fixed distance in px, not a fraction of the link's
+// own length — otherwise a long edge fades gently over hundreds of px while a short
+// one barely fades at all. Capped at 50% of the link's length so short links still
+// meet cleanly in the middle rather than overshooting past each other.
+const LINK_FADE_DISTANCE = 40;
+function fadeStopOffsets(d: any): [number, number] {
+  const dx = d.target.x - d.source.x, dy = d.target.y - d.source.y;
+  const len = Math.sqrt(dx * dx + dy * dy) || 1;
+  const frac = Math.min(0.5, LINK_FADE_DISTANCE / len);
+  return [frac, 1 - frac];
+}
 
 function render() {
   const { nodes: rawNodes, edges: rawEdges } = graphData;
@@ -206,12 +210,27 @@ function render() {
     allLinks.push({ source: e.src, target: e.tar, type: e.type, status: e.status, count: e.count });
   }
 
-  // Degree map for charge scaling (read before D3 mutates source/target to objects)
+  // Degree map for charge scaling, and each node's incident-edge statuses for its
+  // border colour below — both read here before D3 mutates source/target to objects.
   const degreeMap = new Map<string, number>();
+  const edgeStatusesByNode = new Map<string, Set<string>>();
+  function addEdgeStatus(nodeId: string, status: string | null | undefined) {
+    if (!edgeStatusesByNode.has(nodeId)) edgeStatusesByNode.set(nodeId, new Set());
+    edgeStatusesByNode.get(nodeId)!.add(status ?? 'unchanged');
+  }
   for (const l of allLinks) {
     const s = l.source, t = l.target;
     degreeMap.set(s, (degreeMap.get(s) || 0) + 1);
     degreeMap.set(t, (degreeMap.get(t) || 0) + 1);
+    addEdgeStatus(s, l.status);
+    addEdgeStatus(t, l.status);
+  }
+  // A node's border colour: the aggregate of every currently-rendered edge touching
+  // it (same aggregateStatus() aggregate.mts uses to collapse several raw edges into
+  // one link's status) — distinct from its fill, which is the node's OWN diff status.
+  // Falls back to 'unchanged' grey for an isolated node with no edges at all.
+  function borderColor(id: string): string {
+    return STATUS_COLOR[aggregateStatus(edgeStatusesByNode.get(id) ?? new Set()) ?? 'unchanged'];
   }
 
   const w = svg.node().clientWidth || 800, h = svg.node().clientHeight || 600;
@@ -291,6 +310,28 @@ function render() {
       .style('stroke-width', '1.5').style('pointer-events', 'none'));
   }
 
+  // A gradient per link (userSpaceOnUse, positioned to the line's actual endpoints
+  // on every tick below) carrying the fade: full peak opacity at both the source and
+  // target ends, ramping down over LINK_FADE_DISTANCE px to a faded plateau covering
+  // whatever length remains in the middle. Rebuilt each render alongside the links
+  // themselves, in the same allLinks order/index so each line's stroke can reference
+  // its gradient by index.
+  defs.selectAll('.link-gradient').remove();
+  gradientSel = defs.selectAll('.link-gradient').data(allLinks).join('linearGradient')
+    .attr('class', 'link-gradient')
+    .attr('id', (_d: any, i: number) => 'link-grad-' + i)
+    .attr('gradientUnits', 'userSpaceOnUse')
+    .each(function (this: any, d: any) {
+      const col = STATUS_COLOR[d.status ?? 'unchanged'];
+      const peak = STATUS_OPACITY[d.status ?? 'unchanged'];
+      const [f1, f2] = fadeStopOffsets(d);
+      const g = d3.select(this);
+      g.append('stop').attr('offset', '0%').attr('stop-color', col).attr('stop-opacity', peak);
+      g.append('stop').attr('class', 'stop-fade-in').attr('offset', (f1 * 100) + '%').attr('stop-color', col).attr('stop-opacity', peak * LINK_MID_FADE);
+      g.append('stop').attr('class', 'stop-fade-out').attr('offset', (f2 * 100) + '%').attr('stop-color', col).attr('stop-opacity', peak * LINK_MID_FADE);
+      g.append('stop').attr('offset', '100%').attr('stop-color', col).attr('stop-opacity', peak);
+    });
+
   // Remove stale wrapper groups (not just their contents) and recreate them
   // links-then-nodes, so nodes always paint on top of edges.
   root.selectAll('.links').remove();
@@ -300,13 +341,8 @@ function render() {
       const st = d.status && d.status !== 'unchanged' ? ' ' + d.status : '';
       return 'link' + st;
     })
-    .attr('stroke', (d: any) => STATUS_COLOR[d.status ?? 'unchanged'])
-    .attr('stroke-opacity', (d: any) => STATUS_OPACITY[d.status ?? 'unchanged'])
+    .attr('stroke', (_d: any, i: number) => 'url(#link-grad-' + i + ')')
     .attr('stroke-dasharray', (d: any) => d.status === 'removed' ? '5,3' : null)
-    .attr('marker-end', (d: any) => {
-      const s = d.status && d.status !== 'unchanged' ? d.status : null;
-      return s ? 'url(#arrow-' + s + ')' : 'url(#arrow)';
-    })
     .on('mouseenter', (e: any, d: any) => showLinkTooltip(e, d))
     .on('mouseleave', () => tooltip.classList.remove('visible'));
 
@@ -323,24 +359,26 @@ function render() {
     .on('mouseleave', () => tooltip.classList.remove('visible'));
 
   nodeSel.filter((d: any) => d._type === 'file').append('circle')
-    .attr('r', 10).attr('fill', (d: any) => nodeColor(d)).attr('stroke', 'none');
+    .attr('r', 10).attr('fill', (d: any) => nodeColor(d))
+    .attr('stroke', (d: any) => borderColor(d.id)).attr('stroke-width', 2);
 
   nodeSel.filter((d: any) => d._type === 'symbol').each(function (this: any, d: any) {
     const g = d3.select(this);
     const col = symColor(d);
+    const border = borderColor(d.id);
     const sh = symShape(d);
     const s = d._scale ?? 1;
     if (sh === 'triangle') {
       g.append('polygon').attr('points', `0,${-8*s} ${7*s},${5*s} ${-7*s},${5*s}`)
-        .attr('fill', col).attr('stroke', col).attr('stroke-width', 1);
+        .attr('fill', col).attr('stroke', border).attr('stroke-width', 2*s);
     } else if (sh === 'square') {
       // Same nominal radius (7) as the circle/triangle branches, so a class glyph
       // isn't visibly smaller than a function/property glyph at the same depth.
       g.append('rect').attr('x', -7*s).attr('y', -7*s).attr('width', 14*s).attr('height', 14*s).attr('rx', 1)
-        .attr('fill', col).attr('stroke', col).attr('stroke-width', 1);
+        .attr('fill', col).attr('stroke', border).attr('stroke-width', 2*s);
     } else {
       g.append('circle').attr('r', 7*s)
-        .attr('fill', col).attr('stroke', col).attr('stroke-width', 1);
+        .attr('fill', col).attr('stroke', border).attr('stroke-width', 2*s);
     }
   });
 
@@ -382,6 +420,19 @@ function render() {
   simulation.on('tick', () => {
     linkSel.attr('x1', (d: any) => d.source.x).attr('y1', (d: any) => d.source.y)
             .attr('x2', (d: any) => d.target.x).attr('y2', (d: any) => d.target.y);
+    // userSpaceOnUse gradients are positioned in absolute coordinates, so each one
+    // has to track its line's endpoints every tick, same as the line itself above.
+    // The fade-in/out stop offsets are also recomputed every tick: they encode a
+    // FIXED pixel distance from each end (LINK_FADE_DISTANCE), and a link's on-screen
+    // length keeps changing as the simulation moves its endpoints.
+    gradientSel.attr('x1', (d: any) => d.source.x).attr('y1', (d: any) => d.source.y)
+               .attr('x2', (d: any) => d.target.x).attr('y2', (d: any) => d.target.y)
+               .each(function (this: any, d: any) {
+                 const [f1, f2] = fadeStopOffsets(d);
+                 const g = d3.select(this);
+                 g.select('.stop-fade-in').attr('offset', (f1 * 100) + '%');
+                 g.select('.stop-fade-out').attr('offset', (f2 * 100) + '%');
+               });
     nodeSel.attr('transform', (d: any) => 'translate(' + (d.x || 0) + ',' + (d.y || 0) + ')');
     labelSel.attr('transform', (d: any) => 'translate(' + (d.x || 0) + ',' + (d.y || 0) + ')');
     groupSymbols.forEach((syms, pid) => {
