@@ -65,7 +65,7 @@ export function buildLinks(nodes: GraphNode[], edges: GraphEdge[], expandedNodes
     if (!g) { g = { src, tar, count: 0, types: new Set(), statuses: new Set() }; groups.set(key, g); }
     g.count++;
     g.types.add(type);
-    g.statuses.add(status && status !== "unchanged" ? status : "unchanged");
+    g.statuses.add(status ?? "unchanged");
   }
 
   // Resolve any edge endpoint (file or symbol id) against the current expand state:
