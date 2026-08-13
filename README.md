@@ -89,7 +89,7 @@ If you're wiring this into something like a GitHub Copilot CLI canvas extension,
 
 | Action | Result |
 |--------|--------|
-| Double-click file node | Cycles changed symbols only → all symbols (incl. unchanged) → collapsed, skipping any step that wouldn't show anything new. A small badge on the node shows `+N` for symbols not currently shown, shrinking as you expand |
+| Double-click file node | Cycles changed symbols only → all symbols (incl. unchanged) → collapsed, skipping any step that wouldn't show anything new. The file node's own size never changes; a small badge on it shows `+N` while there's more to reveal, or `-` once double-clicking would only collapse it |
 | Hover a reference | Shows its type, endpoints, and status — collapsing a file aggregates every underlying reference between two visible nodes into one line, regardless of the original type (a `call` and a `reference` edge landing on the same pair merge into one). Status is the merged result (`unchanged` mixed with a real status just becomes that status; two or more *different* real statuses become `modified`), type similarly picks one representative (`call` > `reference` > `import` > `sibling`), and the tooltip shows the total count merged in |
 | Drag node | Re-position (layout re-stabilises) |
 | Scroll | Zoom in/out |

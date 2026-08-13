@@ -127,7 +127,7 @@ function render() {
 
   for (const n of fileNodes) {
     const pos = posCache.get(n.id);
-    const node = Object.assign({}, n, { _type: 'file', _expanded: (expandLevel.get(n.id) ?? 0) > 0 });
+    const node = Object.assign({}, n, { _type: 'file' });
     if (pos) { node.x = pos.x; node.y = pos.y; }
     allNodes.push(node); nodeById.set(n.id, node);
   }
@@ -226,7 +226,7 @@ function render() {
     .force('center', isFirstRender ? d3.forceCenter(w/2, h/2) : null)
     .force('gx', d3.forceX(w/2).strength(0.015))
     .force('gy', d3.forceY(h/2).strength(0.015))
-    .force('collision', d3.forceCollide((d: any) => d._type === 'symbol' ? 20 : (d._expanded ? 14 : 48)))
+    .force('collision', d3.forceCollide((d: any) => d._type === 'symbol' ? 20 : 48))
     .force('grouping', forceGroup)
     .alpha(isFirstRender ? 1 : 0.3)
     .restart();
@@ -272,24 +272,26 @@ function render() {
     .on('mouseenter', (e: any, d: any) => showTooltip(e, d))
     .on('mouseleave', () => tooltip.classList.remove('visible'));
 
-  nodeSel.filter((d: any) => d._type === 'file' && d._expanded).append('circle')
-    .attr('r', 4).attr('fill', (d: any) => nodeColor(d)).attr('stroke', 'none');
-
-  nodeSel.filter((d: any) => d._type === 'file' && !d._expanded).append('circle')
+  nodeSel.filter((d: any) => d._type === 'file').append('circle')
     .attr('r', 10).attr('fill', (d: any) => nodeColor(d)).attr('stroke', 'none');
 
-  // "+N" badge for symbols not currently shown — lives inside the file's own <g> (not
-  // the labels group), so it moves with the node without needing its own tick tracking.
-  nodeSel.filter((d: any) => d._type === 'file' && hiddenCount(d.id) > 0).each(function (this: any, d: any) {
-    const g = d3.select(this);
+  // A badge inside the file's own <g> (not the labels group, so it moves with the node
+  // without needing its own tick tracking) communicates what double-clicking does next:
+  // "+N" when there's more to reveal, "-" when there's nothing left and it'll collapse.
+  nodeSel.filter((d: any) => d._type === 'file').each(function (this: any, d: any) {
+    const level = expandLevel.get(d.id) ?? 0;
+    const { changed, unchanged } = symbolCounts(d.id);
     const hidden = hiddenCount(d.id);
-    const r = d._expanded ? 4 : 10;
-    const cx = r * 0.7, cy = r * 0.7;
+    const collapsesNext = level > 0 && nextExpandLevel(level, changed, unchanged) === 0;
+    if (hidden <= 0 && !collapsesNext) return;
+
+    const g = d3.select(this);
+    const cx = 7, cy = 7;
     g.append('circle').attr('cx', cx).attr('cy', cy).attr('r', 7)
       .attr('fill', '#30363d').attr('stroke', '#7d8590').attr('stroke-width', 1);
     g.append('text').attr('x', cx).attr('y', cy).attr('text-anchor', 'middle')
       .style('font-size', '9px').style('fill', '#adbac7').style('pointer-events', 'none').style('dominant-baseline', 'central')
-      .text('+' + hidden);
+      .text(hidden > 0 ? '+' + hidden : '-');
   });
 
   nodeSel.filter((d: any) => d._type === 'symbol').each(function (this: any, d: any) {
