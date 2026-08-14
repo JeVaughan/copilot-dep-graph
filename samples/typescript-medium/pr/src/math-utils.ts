@@ -16,3 +16,8 @@ export function divide(a: number, b: number): number {
 export function subtract(a: number, b: number): number {
   return divide(a - b, 1);
 }
+
+
+export function mod(a: number, b: number): number {
+  return a % b;
+}

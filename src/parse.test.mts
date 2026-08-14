@@ -165,6 +165,35 @@ test("parsePr never puts a file endpoint on a call edge; unattributed named-impo
   const refEdge = edges.find(e => e.type === "reference" && e.src === "d.ts" && e.tar === "c.ts:::Thing");
   assert.ok(refEdge, "expected a file-level reference edge from d.ts to c.ts's Thing");
   assert.ok(!edges.some(e => e.type === "call" && e.tar === "c.ts:::Thing"), "Thing is never called/constructed, so no call edge should target it");
+  assert.equal(refEdge?.status, "added", "reference edge should carry d.ts's own (added) status, not a hardcoded null");
+});
+
+test("parsePr: a reference edge carries the source file's own status even when that status isn't 'added'", () => {
+  const repo2 = mkdtempSync(join(tmpdir(), "dep-graph-core-test-"));
+  const git2 = (cmd: string) => execSync(`git ${cmd}`, { cwd: repo2, encoding: "utf8" });
+  git2("init -q");
+  git2('config user.email "test@example.com"');
+  git2('config user.name "Test"');
+
+  writeFileSync(join(repo2, "c.ts"), `export interface Thing { n: number }\n`);
+  writeFileSync(join(repo2, "d.ts"), `import { Thing } from "./c";\nexport const x: Thing = { n: 0 };\n`);
+  git2("add c.ts d.ts");
+  git2('commit -q -m base');
+
+  // Both files change again (c.ts trivially, so it stays in the diff; d.ts's use of
+  // Thing is still type-position-only) — this time d.ts is "modified", not "added",
+  // to prove the fix reads the file's actual status rather than assuming "added".
+  writeFileSync(join(repo2, "c.ts"), `export interface Thing { n: number }\nexport interface Other { m: number }\n`);
+  writeFileSync(join(repo2, "d.ts"), `import { Thing } from "./c";\nexport const x: Thing = { n: 1 };\n`);
+  git2("add c.ts d.ts");
+  git2('commit -q -m "modify c.ts and d.ts"');
+
+  const { edges } = parsePr({ repoPath: repo2, prRef: "HEAD", baseRef: "HEAD~1" });
+  rmSync(repo2, { recursive: true, force: true });
+
+  const refEdge = edges.find(e => e.type === "reference" && e.src === "d.ts" && e.tar === "c.ts:::Thing");
+  assert.ok(refEdge, "expected a file-level reference edge from d.ts to c.ts's Thing");
+  assert.equal(refEdge?.status, "modified", "reference edge should carry d.ts's own (modified) status");
 });
 
 test("parsePr passes refs containing shell-special characters (^) through untouched", () => {

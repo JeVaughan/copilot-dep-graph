@@ -338,7 +338,7 @@ export function parsePr({ repoPath, prRef = "FETCH_HEAD", baseRef = "HEAD", excl
                     const key = `${srcFileId}->${tgtFileId}:::${name}:reference`;
                     if (seenLinks.has(key)) continue;
                     seenLinks.add(key);
-                    edges.push({ src: srcFileId, tar: `${tgtFileId}:::${name}`, type: 'reference', status: null, count: 1 });
+                    edges.push({ src: srcFileId, tar: `${tgtFileId}:::${name}`, type: 'reference', status: fileStatus.get(srcFile) ?? null, count: 1 });
                 }
             }
         }
