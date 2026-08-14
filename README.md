@@ -138,7 +138,7 @@ Edge type (import / call / reference / sibling) is not shown as a distinct line 
 
 ## TypeScript path aliases
 
-`parsePr` resolves `@alias/*`-style imports via a hardcoded alias map in [src/parse.mts](src/parse.mts) (`TS_ALIASES`), tailored to one specific frontend monorepo layout. It is not read from the target repo's `tsconfig.json` — if you're pointing this at a different repo, edit that map (or open an issue/PR to make it configurable).
+`parsePr` resolves `@alias/*`-style imports via a hardcoded alias map in [src/parser/lang/typescript.mts](src/parser/lang/typescript.mts) (`TS_ALIASES`), tailored to one specific frontend monorepo layout. It is not read from the target repo's `tsconfig.json` — if you're pointing this at a different repo, edit that map (or open an issue/PR to make it configurable).
 
 ## Project structure
 
@@ -147,12 +147,19 @@ dep-graph-core/
 ├── src/
 │   ├── index.mts          # Public API barrel
 │   ├── types.mts          # Shared GraphNode/GraphEdge/GraphData shape — zero imports of its own
-│   ├── parse.mts          # parsePr: git diff + tree-sitter → graph data
-│   ├── parse.test.mts     # node:test suite for parse.mts, runs against the built dist/
 │   ├── github.mts         # resolveGitHubPr: GitHub PR number → prRef (fetch, refs/pull/<n>/head)
 │   ├── github.test.mts
-│   ├── treesitter.mts     # AST extraction (TypeScript + Go)
-│   ├── treesitter.test.mts
+│   ├── parser/            # Everything git-diff/AST-parsing related, decoupled from the viewer:
+│   │   ├── parse.mts          #   parsePr: git diff + per-filetype parsers → graph data
+│   │   ├── parse.test.mts     #   node:test suite for parse.mts, runs against the built dist/
+│   │   ├── treesitter.mts     #   public parseSource() dispatcher, delegating to lang/
+│   │   ├── treesitter.test.mts
+│   │   ├── graph-diff.mts     #   diffEdges: structural added/removed/unchanged edge diffing
+│   │   ├── graph-diff.test.mts
+│   │   └── lang/              #   one file per language's parsing + import resolution:
+│   │       ├── shared.mts         native tree-sitter bindings + AST-walking helpers
+│   │       ├── typescript.mts     TS/JS/TSX/JSX parsing + relative/alias import resolution
+│   │       └── go.mts             Go parsing + package-path suffix import resolution
 │   ├── viewer.mts         # Local HTTP/SSE server serving the D3 UI
 │   ├── viewer.test.mts
 │   ├── aggregate.mts      # Pure edge-collapsing logic, shared by the visualisation modules and its tests
@@ -172,7 +179,7 @@ dep-graph-core/
 ├── graph.html            # D3 force graph UI shell (loads /graph-client.js as a module)
 ├── d3.min.js             # Bundled D3 v7 (no CDN)
 ├── package.json
-├── tsconfig.json          # Compiles src/*.mts → dist/ (Node ESM library)
+├── tsconfig.json          # Compiles src/*.mts + src/parser/*.mts → dist/ (Node ESM library)
 └── tsconfig.browser.json  # Compiles src/graph-client.ts + src/visualisation/ (+ aggregate.mts) → dist/ (browser ESM)
 ```
 

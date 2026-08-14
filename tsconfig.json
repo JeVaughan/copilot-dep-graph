@@ -14,6 +14,6 @@
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["src/index.mts", "src/parse.mts", "src/viewer.mts", "src/treesitter.mts", "src/aggregate.mts", "src/types.mts"],
+  "include": ["src/index.mts", "src/viewer.mts", "src/aggregate.mts", "src/types.mts", "src/parser/parse.mts", "src/parser/treesitter.mts", "src/parser/graph-diff.mts"],
   "exclude": []
 }

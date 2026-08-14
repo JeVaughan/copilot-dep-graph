@@ -7,7 +7,7 @@ import type { AddressInfo } from "node:net";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { GraphData } from "./parse.mjs";
+import type { GraphData } from "./types.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // Assets ship at the package root, one level up from the compiled dist/ output.

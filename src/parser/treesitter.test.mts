@@ -1,6 +1,6 @@
 import { before, test } from "node:test";
 import assert from "node:assert/strict";
-import { initParsers, parseSource, isAvailable } from "../dist/index.mjs";
+import { initParsers, parseSource, isAvailable } from "../../dist/index.mjs";
 
 before(() => {
   initParsers();
