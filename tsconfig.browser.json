@@ -11,5 +11,6 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["src/graph-client.ts"]
+  "include": ["src/graph-client.ts", "src/visualisation"],
+  "exclude": ["src/visualisation/*.test.mts"]
 }

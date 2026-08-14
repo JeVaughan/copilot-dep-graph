@@ -90,7 +90,7 @@ A symbol is just a node like any other, flattened alongside its file rather than
 
 ### Collapsing edges (`src/aggregate.mts`)
 
-The viewer collapses a file's symbols into the file node itself when it isn't expanded. `aggregate.mts` (pure, dependency-free, tested independently of the DOM) decides which nodes are visible for a given expand state and re-resolves every edge against that — several raw edges landing on the same visible `(src, tar)` pair, regardless of their original `type`, merge into a single `GraphEdge` with `count` set to the total and `type`/`status` each collapsed to one representative value. It's imported directly by `graph-client.ts` (served as `/aggregate.mjs` alongside `/graph-client.js`, both loaded as real ES modules) so the browser and the test suite run the exact same logic — no separate, hand-verified copy.
+The viewer collapses a file's symbols into the file node itself when it isn't expanded. `aggregate.mts` (pure, dependency-free, tested independently of the DOM) decides which nodes are visible for a given expand state and re-resolves every edge against that — several raw edges landing on the same visible `(src, tar)` pair, regardless of their original `type`, merge into a single `GraphEdge` with `count` set to the total and `type`/`status` each collapsed to one representative value. It's imported directly by the `visualisation/` modules (served as `/aggregate.mjs` alongside `/graph-client.js` and `/visualisation/*.js`, all loaded as real ES modules) so the browser and the test suite run the exact same logic — no separate, hand-verified copy.
 
 Each file has an expand *level*, not just an on/off state: 0 (collapsed) → 1 (changed symbols only) → 2 (every symbol, including unchanged) → back to 0. `aggregate.mts`'s `nextExpandLevel` skips any level that wouldn't add anything new — an all-added file has no unchanged symbols, so level 1 goes straight back to 0; a file with no changed symbols (the diff didn't touch anything tree-sitter treats as a symbol) skips straight from 0 to 2.
 
@@ -155,16 +155,25 @@ dep-graph-core/
 │   ├── treesitter.test.mts
 │   ├── viewer.mts         # Local HTTP/SSE server serving the D3 UI
 │   ├── viewer.test.mts
-│   ├── aggregate.mts      # Pure edge-collapsing logic, shared by graph-client.ts and its tests
+│   ├── aggregate.mts      # Pure edge-collapsing logic, shared by the visualisation modules and its tests
 │   ├── aggregate.test.mts
-│   └── graph-client.ts    # Browser-side D3 force graph renderer (real ES module)
+│   ├── graph-client.ts    # Browser entry point (real ES module) — page bootstrapping only
+│   └── visualisation/     # The actual renderer, split by concern, each a real ES module:
+│       ├── state.ts          #   shared mutable render state (one object — see its own comment on why)
+│       ├── dom.ts             #   top-level D3/DOM handles (svg, root, zoom, tooltip)
+│       ├── colors.ts          #   status colour/opacity, node/hull colour helpers
+│       ├── sizing.ts          #   depth scaling, hull geometry, link width/strength curves
+│       ├── expand-state.ts    #   what's expanded, what double-click does next
+│       ├── hover.ts           #   the three hover-focus modes and their shared dimming logic
+│       ├── tooltip.ts         #   tooltip content and positioning
+│       └── render.ts          #   the render() loop that ties the above together
 ├── samples/               # Checked-in base/pr fixtures for the dev harness (see below)
 ├── dev/serve.mts         # Manual dev harness (not published)
 ├── graph.html            # D3 force graph UI shell (loads /graph-client.js as a module)
 ├── d3.min.js             # Bundled D3 v7 (no CDN)
 ├── package.json
 ├── tsconfig.json          # Compiles src/*.mts → dist/ (Node ESM library)
-└── tsconfig.browser.json  # Compiles src/graph-client.ts (+ aggregate.mts) → dist/ (browser ESM)
+└── tsconfig.browser.json  # Compiles src/graph-client.ts + src/visualisation/ (+ aggregate.mts) → dist/ (browser ESM)
 ```
 
 `dist/` and `node_modules/` are gitignored — they're produced by `npm run build` (or automatically via `prepare` when installed as a dependency).

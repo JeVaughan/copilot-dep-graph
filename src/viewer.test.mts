@@ -26,6 +26,15 @@ test("startViewer serves the graph UI, data, and static assets", async () => {
     const d3res = await fetch(viewer.url + "d3.min.js");
     assert.equal(d3res.status, 200);
 
+    const aggregateJs = await (await fetch(viewer.url + "aggregate.mjs")).text();
+    assert.ok(aggregateJs.includes("computeVisibleNodeIds"), "aggregate.mjs should serve the real compiled module");
+
+    // graph-client.js imports its rendering logic from ./visualisation/*.js — served
+    // by a generic route (see VISUALISATION_FILE in viewer.mts), not one hardcoded
+    // per file, so this exercises that routing directly rather than just trusting it.
+    const renderJs = await (await fetch(viewer.url + "visualisation/render.js")).text();
+    assert.ok(renderJs.includes("export function render"), "should serve the real compiled visualisation module");
+
     const graph1 = await (await fetch(viewer.url + "graph")).json();
     assert.equal(graph1.nodes.length, 2);
 

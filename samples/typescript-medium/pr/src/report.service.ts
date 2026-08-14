@@ -1,9 +1,9 @@
-import { add, multiply } from "./math-utils";
+import { add, multiply, roundTo } from "./math-utils";
 import { formatCurrency } from "./formatter";
 
 export class ReportService {
   computeTotal(a: number, b: number): number {
-    return Math.round(add(a, b));
+    return add(a, b);
   }
 
   computeArea(w: number, h: number): number {

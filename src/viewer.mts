@@ -40,6 +40,15 @@ function readAggregateJs(): string {
     return readFileSync(join(__dirname, 'aggregate.mjs'), 'utf8');
 }
 
+// graph-client.js also imports its actual rendering logic from ./visualisation/*.js
+// (relative to its own URL). Rather than a hardcoded route per file — easy to forget
+// one as that directory grows — this serves anything under dist/visualisation/ whose
+// name is a plain identifier ending in .js, so new files there just work.
+const VISUALISATION_FILE = /^\/visualisation\/([\w-]+\.js)$/;
+function readVisualisationJs(filename: string): string {
+    return readFileSync(join(__dirname, 'visualisation', filename), 'utf8');
+}
+
 export interface StartViewerOptions {
   // Fixed port to bind to. Omit (or pass 0) for an OS-assigned ephemeral
   // port — the safe default when multiple viewers might run concurrently.
@@ -67,6 +76,12 @@ export function startViewer(initialGraph?: GraphData, options?: StartViewerOptio
             if (url.pathname === "/aggregate.mjs") {
                 res.setHeader("Content-Type", "application/javascript");
                 res.end(readAggregateJs());
+                return;
+            }
+            const vizMatch = url.pathname.match(VISUALISATION_FILE);
+            if (vizMatch) {
+                res.setHeader("Content-Type", "application/javascript");
+                res.end(readVisualisationJs(vizMatch[1]));
                 return;
             }
             if (url.pathname === "/events") {
